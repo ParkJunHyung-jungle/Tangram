@@ -43,7 +43,18 @@ public sealed class SpellGameUI : MonoBehaviour
     private int _impactTarget = -1;
     private bool _impactAll;
     private bool _showHelp;
+    private bool _showPauseMenu;
+    private bool _onboardingComplete;
+    private bool _onboardingPlacementExplained;
     private int _pendingCast = -1;
+    private string _onboardingStep = "";
+    private float _onboardingActivity;
+    private RectTransform _onboardingGhost;
+    private CanvasGroup _onboardingGhostGroup;
+    private RectTransform _onboardingGhostIcon;
+    private int _onboardingGhostRotation;
+    private Vector2 _onboardingGhostStart;
+    private Vector2 _onboardingGhostEnd;
 
     /// <summary>첫 장면에서 게임 화면을 자동으로 생성한다.</summary>
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -69,13 +80,19 @@ public sealed class SpellGameUI : MonoBehaviour
     void Update()
     {
         UpdateFeedback();
+        UpdateOnboarding();
+        if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
+        {
+            if (_showPauseMenu) _showPauseMenu = false;
+            else { _showHelp = false; _showPauseMenu = true; _pendingCast = -1; _message = ""; ClearSelection(); _dragGhost = null; }
+            _onboardingActivity = Time.unscaledTime; Render(); return;
+        }
+        if (_showPauseMenu) return;
         if (_game.CurrentPhase != SpellGame.Phase.Combat) return;
         if (_showHelp)
         {
-            if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame) { _showHelp = false; Render(); }
             return;
         }
-        if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame) { _pendingCast = -1; ClearSelection(); _message = ""; Render(); }
         if ((Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame) || (Mouse.current != null && Mouse.current.rightButton.wasPressedThisFrame))
         {
             if (_selectedCard != null)
@@ -160,18 +177,17 @@ public sealed class SpellGameUI : MonoBehaviour
     /// <summary>현재 게임 단계에 맞춰 화면 요소를 갱신한다.</summary>
     private void Render()
     {
+        _onboardingGhost = null; _onboardingGhostGroup = null; _onboardingGhostIcon = null;
         _impactImages.Clear();
         foreach (Transform child in _root) Destroy(child.gameObject);
         Panel(_root, 0, 0, 1280, 720, new Color(0.095f, 0.12f, 0.16f));
         if (_game.CurrentPhase == SpellGame.Phase.Title)
         {
             Label(_root, "주문 조각", 340, 170, 600, 90, 48);
-            Label(_root, "도형을 모아 주문을 완성하세요", 340, 260, 600, 50, 24);
             RectTransform divider = Panel(_root, 500, 322, 280, 2, new Color(0.80f, 0.65f, 0.38f));
             divider.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
             Button(_root, "시작", 520, 360, 240, 64, () => { _game.StartGame(); ResetPatterns(); ClearSelection(); Render(); });
-            Label(_root, "작은 주문은 빠르게, 큰 주문은 다음 턴까지", 330, 445, 620, 36, 18);
-            Label(_root, "도형 드래그 → 도안 완성 → 시전 버튼\nR 또는 우클릭으로 회전 · 완성된 도안은 사용할 때까지 유지", 300, 502, 680, 65, 17);
+            Label(_root, "도형 드래그 → 도안 완성 → 시전 버튼\nR 또는 우클릭으로 회전", 300, 502, 680, 65, 17);
         }
         else if (_game.CurrentPhase == SpellGame.Phase.Reward) RenderRewards();
         else if (_game.CurrentPhase == SpellGame.Phase.Victory || _game.CurrentPhase == SpellGame.Phase.Defeat)
@@ -182,7 +198,20 @@ public sealed class SpellGameUI : MonoBehaviour
         else RenderCombat();
         RenderFeedback();
         if (_showHelp) RenderHelp();
+        if (_showPauseMenu) RenderPauseMenu();
         _renderedPhase = _game.CurrentPhase;
+    }
+
+    /// <summary>화면 입력을 가리고 계속하기, 타이틀 전환과 게임 종료 메뉴를 표시한다.</summary>
+    private void RenderPauseMenu()
+    {
+        Panel(_root, 0, 0, 1280, 720, new Color(0, 0, 0, 0.8f));
+        RectTransform panel = Panel(_root, 435, 175, 410, 370, new Color(0.18f, 0.24f, 0.30f));
+        Label(panel, "일시 정지", 20, 22, 370, 50, 28);
+        Button(panel, "계속하기", 70, 100, 270, 55, () => { _showPauseMenu = false; _onboardingActivity = Time.unscaledTime; Render(); });
+        Button(panel, "타이틀로 가기", 70, 170, 270, 55, () => { _game.ReturnToTitle(); _showPauseMenu = false; _showHelp = false; _pendingCast = -1; ClearSelection(); Render(); });
+        Button(panel, "게임 종료", 70, 240, 270, 55, () => Application.Quit());
+        Label(panel, "Esc로 돌아가기", 20, 315, 370, 30, 15);
     }
 
     /// <summary>전투 상태와 공유 제작판, 손패 및 제어 버튼을 표시한다.</summary>
@@ -236,6 +265,151 @@ public sealed class SpellGameUI : MonoBehaviour
         _previewHint = hint.gameObject.AddComponent<UnityEngine.UI.Text>();
         _previewHint.font = _font; _previewHint.fontSize = 17; _previewHint.color = Color.white; _previewHint.raycastTarget = false;
         SetPreviewHint(-1, -1, -1);
+        if (!_onboardingComplete) RenderOnboarding();
+    }
+
+    /// <summary>첫 주문까지 현재 가능한 조작을 강조하고 설명과 고스트를 준비한다.</summary>
+    private void RenderOnboarding()
+    {
+        List<Rect> holes = new List<Rect>(); string step; string message; SpellGame.Card ghostCard = null; int ghostRotation = 0; bool showContinue = false;
+        Vector2 start, end;
+        int complete = -1;
+        foreach (int spell in _game.Spells) if (_game.IsComplete(spell)) { complete = spell; break; }
+        if (_pendingCast >= 0)
+        {
+            int target = _game.Enemies.FindIndex(enemy => enemy.Health > 0);
+            float x = (_game.Enemies.Count == 1 ? 522 : 390) + target * 250;
+            holes.Add(new Rect(x, 58, 235, 66)); start = end = new Vector2(x + 117, 91);
+            step = "target"; message = "이 주문은 선택한 적 하나에게 효과를 적용합니다.\n공격할 적을 선택하세요.";
+        }
+        else if (!_onboardingPlacementExplained && _game.CraftCount > 0)
+        {
+            holes.Add(new Rect(1080, 5, 165, 34)); start = end = Vector2.zero;
+            step = "placements"; showContinue = true;
+            message = "한 턴에 기본 3회 조각을 배치할 수 있습니다.\n시전하지 않은 조각은 다음 턴에도 도안에 남습니다.";
+        }
+        else if (complete >= 0)
+        {
+            float y = 155 + complete * 53;
+            holes.Add(new Rect(1080, y, 95, 44)); start = end = new Vector2(1127, y + 22);
+            step = "cast" + complete; message = "도안이 완성되어 주문이 준비됐습니다.\n시전 버튼을 눌러 주문을 사용하세요.";
+        }
+        else
+        {
+            int cardIndex = -1, board = -1, cellX = 0, cellY = 0, rotation = 0;
+            if (_game.PlacementsLeft > 0)
+            {
+                for (int pass = 0; pass < 2 && cardIndex < 0; pass++)
+                    for (int i = 0; i < _game.Hand.Count && cardIndex < 0; i++)
+                    {
+                        SpellGame.Card candidate = _game.Hand[i];
+                        if (_selectedCard != null && _selectedPiece == null && candidate != _selectedCard) continue;
+                        SpellGame.Shape preferred = _game.CraftCount == 0 ? SpellGame.Shape.Square : SpellGame.Shape.QuarterTriangle;
+                        if (pass == 0 && candidate.Shape != preferred) continue;
+                        foreach (int spell in _game.Spells)
+                        {
+                            if (!_patternPlaced[spell]) continue;
+                            for (int y = 0; y < 3 && cardIndex < 0; y++) for (int x = 0; x < 3 && cardIndex < 0; x++) for (int r = 0; r < 4; r++)
+                                if (_game.CanPlace(spell, candidate, x, y, r)) { cardIndex = i; board = spell; cellX = x; cellY = y; rotation = r; break; }
+                            if (cardIndex >= 0) break;
+                        }
+                    }
+            }
+            if (cardIndex < 0)
+            {
+                holes.Add(new Rect(1080, 550, 160, 65)); start = end = new Vector2(1160, 582);
+                step = "turn"; message = "턴을 종료하면 적이 공격하고 새 턴에 조각과 배치 횟수를 받습니다.\n주문을 이어서 완성하세요.";
+            }
+            else
+            {
+                ghostCard = _game.Hand[cardIndex]; ghostRotation = rotation;
+                float cardX = 30 + cardIndex * 148;
+                Vector2Int origin = _patternPositions[board];
+                float gridX = 115 + (origin.x + cellX) * 72, gridY = 183 + (origin.y + cellY) * 72;
+                holes.Add(new Rect(cardX, 525, 144, 126)); holes.Add(new Rect(gridX, gridY, 72, 72));
+                start = new Vector2(cardX + 72, 588); end = new Vector2(gridX + 36, gridY + 36);
+                step = "place" + ghostCard.Id + ":" + board + ":" + cellX + ":" + cellY + ":" + rotation;
+                message = "도안에 조각을 채우면 주문을 시전할 수 있습니다.\n손패에서 조각을 선택해 도안의 빈칸으로 드래그하세요." + ((_selectedCard == ghostCard ? _rotation : 0) != rotation ? "\nR 또는 우클릭으로 회전해 빈 영역에 맞추세요." : "");
+            }
+        }
+        if (_onboardingStep != step) { _onboardingStep = step; _onboardingActivity = Time.unscaledTime; }
+        List<float> xs = new List<float> { 0, 1280 }, ys = new List<float> { 0, 720 };
+        foreach (Rect hole in holes) { xs.Add(hole.xMin); xs.Add(hole.xMax); ys.Add(hole.yMin); ys.Add(hole.yMax); }
+        xs.Sort(); ys.Sort();
+        for (int y = 0; y < ys.Count - 1; y++) for (int x = 0; x < xs.Count - 1; x++)
+        {
+            float width = xs[x + 1] - xs[x], height = ys[y + 1] - ys[y];
+            if (width <= 0 || height <= 0) continue;
+            Vector2 center = new Vector2(xs[x] + width / 2, ys[y] + height / 2);
+            bool exposed = false; foreach (Rect hole in holes) if (hole.Contains(center)) { exposed = true; break; }
+            if (!exposed) Panel(_root, xs[x], ys[y], width, height, new Color(0, 0, 0, 0.76f)).GetComponent<UnityEngine.UI.Image>().raycastTarget = showContinue;
+        }
+        const float popupWidth = 460, popupHeight = 132;
+        Vector2 popupPosition = OnboardingPopupPosition(holes, popupWidth, popupHeight);
+        RectTransform popup = Panel(_root, popupPosition.x, popupPosition.y, popupWidth, popupHeight, new Color(0.12f, 0.19f, 0.25f, 0.98f));
+        popup.GetComponent<UnityEngine.UI.Image>().raycastTarget = showContinue;
+        Label(popup, "주문 시전 안내", 16, 6, popupWidth - 32, 25, 17, TextAnchor.MiddleLeft);
+        Label(popup, message, 16, 31, popupWidth - 32, showContinue ? 58 : 94, 16, TextAnchor.MiddleLeft);
+        if (showContinue)
+        {
+            Button(popup, "확인", popupWidth - 110, 96, 94, 30, () => { _onboardingPlacementExplained = true; Render(); }, null, 15);
+            start = end = new Vector2(popupPosition.x + popupWidth - 63, popupPosition.y + 111);
+        }
+        _onboardingGhostStart = start; _onboardingGhostEnd = end;
+        _onboardingGhostRotation = ghostRotation;
+        _onboardingGhost = Element("Onboarding Ghost", _root, start.x, start.y, 48, 48);
+        _onboardingGhost.pivot = new Vector2(0.5f, 0.5f);
+        _onboardingGhostGroup = _onboardingGhost.gameObject.AddComponent<CanvasGroup>();
+        _onboardingGhostGroup.blocksRaycasts = false; _onboardingGhostGroup.interactable = false; _onboardingGhostGroup.alpha = 0;
+        if (ghostCard != null)
+        {
+            RectTransform iconRect = Element("Ghost Shape", _onboardingGhost, 0, 0, 36, 36);
+            iconRect.gameObject.AddComponent<CanvasRenderer>();
+            SpellShapeGraphic icon = iconRect.gameObject.AddComponent<SpellShapeGraphic>();
+            icon.Shape = ghostCard.Shape; icon.color = new Color(0.6f, 1f, 0.85f, 0.75f); icon.raycastTarget = false;
+            iconRect.pivot = new Vector2(0.5f, 0.5f); iconRect.anchoredPosition = new Vector2(18, -18);
+            _onboardingGhostIcon = iconRect;
+        }
+        Label(_onboardingGhost, "☛", 20, 17, 28, 30, 24);
+    }
+
+    /// <summary>강조 영역들을 가리지 않고 화면 안에서 첫 강조 영역에 가까운 팝업 좌표를 반환한다.</summary>
+    private Vector2 OnboardingPopupPosition(List<Rect> holes, float width, float height)
+    {
+        Rect focus = holes[0];
+        Vector2[] candidates = {
+            new Vector2(focus.center.x - width / 2, focus.yMin - height - 12),
+            new Vector2(focus.center.x - width / 2, focus.yMax + 12),
+            new Vector2(focus.xMin - width - 12, focus.center.y - height / 2),
+            new Vector2(focus.xMax + 12, focus.center.y - height / 2)
+        };
+        Vector2 best = candidates[0]; float bestScore = float.MaxValue;
+        foreach (Vector2 candidate in candidates)
+        {
+            Vector2 position = new Vector2(Mathf.Clamp(candidate.x, 12, 1280 - width - 12), Mathf.Clamp(candidate.y, 12, 720 - height - 12));
+            Rect popup = new Rect(position.x, position.y, width, height);
+            float score = Vector2.Distance(popup.center, focus.center);
+            foreach (Rect hole in holes) if (popup.Overlaps(hole)) score += 10000;
+            if (score < bestScore) { bestScore = score; best = position; }
+        }
+        return best;
+    }
+
+    /// <summary>입력 후 대기 시간을 초기화하고 일정 시간이 지나면 안내 동작을 반복한다.</summary>
+    private void UpdateOnboarding()
+    {
+        if (_onboardingComplete || _onboardingGhost == null || _showHelp || _showPauseMenu) return;
+        if ((Mouse.current != null && (Mouse.current.leftButton.wasPressedThisFrame || Mouse.current.rightButton.wasPressedThisFrame || Mouse.current.delta.ReadValue().sqrMagnitude > 0)) ||
+            (Keyboard.current != null && Keyboard.current.anyKey.wasPressedThisFrame)) _onboardingActivity = Time.unscaledTime;
+        float elapsed = Time.unscaledTime - _onboardingActivity;
+        bool visible = elapsed >= 3f && _dragGhost == null;
+        _onboardingGhostGroup.alpha = visible ? 0.85f : 0f;
+        if (!visible) return;
+        float progress = Mathf.Repeat((elapsed - 3f) / 2f, 1f);
+        _onboardingGhost.localScale = Vector3.one * (_onboardingGhostStart == _onboardingGhostEnd ? 1f - 0.22f * Mathf.Pow(Mathf.Sin(progress * Mathf.PI), 4) : 1f);
+        if (_onboardingGhostIcon != null) _onboardingGhostIcon.localRotation = Quaternion.Euler(0, 0, -90 * _onboardingGhostRotation * Mathf.Clamp01(progress * 3f));
+        Vector2 point = Vector2.Lerp(_onboardingGhostStart, _onboardingGhostEnd, Mathf.SmoothStep(0, 1, Mathf.Clamp01((progress - 0.3f) * 1.7f)));
+        _onboardingGhost.anchoredPosition = new Vector2(point.x, -point.y);
     }
 
     /// <summary>적 행동 전후 체력과 방어 차이를 안내하고 다음 화면을 표시한다.</summary>
@@ -257,7 +431,7 @@ public sealed class SpellGameUI : MonoBehaviour
     {
         if (!_game.IsComplete(board)) { _message = "도안을 먼저 완성하세요"; Render(); return; }
         ClearSelection();
-        if (board == 0 || board == 2) { _pendingCast = board; _message = $"{SPELL_NAMES[board]}의 대상을 선택하세요 · Esc 취소"; Render(); }
+        if (board == 0 || board == 2) { _pendingCast = board; _message = $"{SPELL_NAMES[board]}의 대상을 선택하세요 · Esc 메뉴"; Render(); }
         else CastSpell(board, _game.Target);
     }
 
@@ -266,6 +440,7 @@ public sealed class SpellGameUI : MonoBehaviour
     {
         string result = $"{SPELL_NAMES[board]} 시전  ·  {Preview(_game.Boards[board])}";
         if (!_game.Cast(board, target)) { _message = "살아 있는 대상을 선택하세요"; Render(); return; }
+        _onboardingComplete = true;
         _pendingCast = -1; ClearSelection(); _impactAll = board == 3; _impactTarget = board == 1 ? -1 : target;
         _message = ""; ShowFeedback(result, PatternColor(board)); Render();
     }
@@ -302,6 +477,10 @@ public sealed class SpellGameUI : MonoBehaviour
     {
         _feedbackUntil = 0;
         _showHelp = false;
+        _showPauseMenu = false;
+        _onboardingComplete = false;
+        _onboardingPlacementExplained = false;
+        _onboardingStep = ""; _onboardingActivity = Time.unscaledTime;
         _pendingCast = -1;
         _patternPositions[0] = new Vector2Int(0, 0); _patternPositions[1] = new Vector2Int(1, 0);
         _patternPositions[2] = new Vector2Int(2, 0); _patternPositions[3] = new Vector2Int(4, 0);
@@ -483,7 +662,7 @@ public sealed class SpellGameUI : MonoBehaviour
     public void SetPreviewHint(int board, int x, int y)
     {
         if (_previewHint == null) return;
-        string hint = "손패 선택 → 판 클릭 배치   ·   R / 우클릭 회전   ·   Esc 선택 해제";
+        string hint = "손패 선택 → 판 클릭 배치   ·   R / 우클릭 회전   ·   Esc 메뉴";
         if (board >= 0 && _selectedCard != null)
         {
             bool valid = CanPreview(board, x, y);

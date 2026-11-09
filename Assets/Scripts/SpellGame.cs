@@ -74,6 +74,9 @@ public sealed class SpellGame
         StartBattle();
     }
 
+    /// <summary>현재 게임을 종료하고 타이틀 화면 상태로 전환한다.</summary>
+    public void ReturnToTitle() { CurrentPhase = Phase.Title; }
+
     /// <summary>개별 ID를 가진 카드를 소유 목록에 추가한다.</summary>
     private void AddCard(Shape shape, Effect effect)
     {
@@ -86,6 +89,7 @@ public sealed class SpellGame
         Battle++; Turn = 0; Block = 0; Target = 0; Enemies.Clear(); Hand.Clear(); _discard.Clear(); _draw.Clear();
         for (int i = 0; i < Boards.Length; i++) { Boards[i].Pieces.Clear(); Boards[i].Spell = i; }
         _draw.AddRange(_owned); Shuffle(_draw);
+        GuaranteeOpeningShape(Shape.Square, _draw.Count - 1); GuaranteeOpeningShape(Shape.QuarterTriangle, _draw.Count - 2);
         if (Battle == 1) AddEnemy(0);
         if (Battle == 2) { AddEnemy(0); AddEnemy(0); }
         if (Battle == 3) AddEnemy(1);
@@ -105,6 +109,16 @@ public sealed class SpellGame
     private void Shuffle(List<Card> cards)
     {
         for (int i = cards.Count - 1; i > 0; i--) { int j = _random.Next(i + 1); Card c = cards[i]; cards[i] = cards[j]; cards[j] = c; }
+    }
+
+    /// <summary>첫 손패에 포함할 도형을 섞인 덱의 지정된 뽑기 위치로 옮긴다.</summary>
+    private void GuaranteeOpeningShape(Shape shape, int drawIndex)
+    {
+        for (int i = 0; i <= drawIndex; i++)
+        {
+            if (_draw[i].Shape != shape) continue;
+            Card card = _draw[drawIndex]; _draw[drawIndex] = _draw[i]; _draw[i] = card; return;
+        }
     }
 
     /// <summary>새 턴에 배치 횟수를 갱신하고 카드를 뽑는다.</summary>
