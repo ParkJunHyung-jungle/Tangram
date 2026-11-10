@@ -12,15 +12,10 @@ public sealed class SpellPatternDrag : MonoBehaviour, IBeginDragHandler, IDragHa
     public void OnBeginDrag(PointerEventData eventData) { }
     public void OnDrag(PointerEventData eventData)
     {
-        foreach (SpellBoardGraphic board in FindObjectsByType<SpellBoardGraphic>(FindObjectsSortMode.None))
-            board.PreviewPattern(eventData, _pattern, Vector2Int.zero);
+        if (isActiveAndEnabled && eventData.button == PointerEventData.InputButton.Left) _ui.PreviewPatternDrag(eventData, _pattern);
     }
     public void OnEndDrag(PointerEventData eventData)
     {
-        foreach (SpellBoardGraphic board in FindObjectsByType<SpellBoardGraphic>(FindObjectsSortMode.None))
-        {
-            board.ClearPatternPreview();
-            if (board.DropPattern(eventData, _pattern)) return;
-        }
+        if (isActiveAndEnabled && eventData.button == PointerEventData.InputButton.Left) _ui.EndPatternDrag(eventData, _pattern);
     }
 }
