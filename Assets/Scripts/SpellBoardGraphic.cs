@@ -142,6 +142,22 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     /// <summary>도안 이동 미리 보기를 지운다.</summary>
     public void ClearPatternPreview() { _previewPattern = -1; SetVerticesDirty(); }
 
+    /// <summary>현재 커서 칸에서 회전된 조각의 배치 안내와 그래픽을 즉시 갱신한다.</summary>
+    public void RefreshPreview()
+    {
+        int board, x, y;
+        if (_ui.MapCell(_hoverX, _hoverY, out board, out x, out y)) _ui.SetPreviewHint(board, x, y);
+        else _ui.SetOutsidePreviewHint();
+        SetVerticesDirty();
+    }
+
+    /// <summary>화면 갱신이나 비활성화 시 조각과 도안의 진행 중 드래그를 취소한다.</summary>
+    public void CancelDrag()
+    {
+        _dragPiece = false; _dragPattern = -1; _previewPattern = -1; _hoverX = _hoverY = -1;
+        SetVerticesDirty();
+    }
+
     public void OnPointerMove(PointerEventData data)
     {
         int x, y, sector, board, lx, ly;
@@ -168,6 +184,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     }
     public void OnBeginDrag(PointerEventData data)
     {
+        if (!_ui.CanInteract || !isActiveAndEnabled) return;
         if (data.button != PointerEventData.InputButton.Left) return;
         int x, y, sector, board, lx, ly;
         if (!GetCellAt(data, data.pressPosition, out x, out y, out sector) || !_ui.MapCell(x, y, out board, out lx, out ly)) return;
@@ -181,11 +198,13 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     }
     public void OnDrag(PointerEventData data)
     {
+        if (!_ui.CanInteract || !isActiveAndEnabled) return;
         if (_dragPiece) { _ui.MoveCardDrag(data.position); PreviewCard(data); }
         else if (_dragPattern >= 0) PreviewPattern(data, _dragPattern, _dragOffset);
     }
     public void OnEndDrag(PointerEventData data)
     {
+        if (!_ui.CanInteract || !isActiveAndEnabled) return;
         if (_dragPiece)
         {
             _dragPiece = false;

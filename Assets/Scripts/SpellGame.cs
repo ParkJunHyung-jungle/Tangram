@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 
 /// <summary>주문 조각 전투의 카드, 제작판과 턴 상태를 관리한다.</summary>
 public sealed class SpellGame
@@ -13,6 +14,7 @@ public sealed class SpellGame
         public int Id { get; internal set; }
         public Shape Shape { get; internal set; }
         public Effect Effect { get; internal set; }
+        public bool HasPersisted { get; internal set; }
     }
 
     public sealed class Placement
@@ -22,23 +24,42 @@ public sealed class SpellGame
         public int Y { get; internal set; }
         public int Rotation { get; internal set; }
         public int Turn { get; internal set; }
-        public bool HasPersisted { get; internal set; }
+        public bool HasPersisted { get { return Card.HasPersisted; } }
+        public bool CanRefund { get; internal set; }
     }
 
     public sealed class Board
     {
-        public int Spell { get; internal set; }
-        public readonly List<Placement> Pieces = new List<Placement>();
+        private readonly List<Placement> _pieces = new List<Placement>();
+
+        public int Spell { get; }
+        public ReadOnlyCollection<Placement> Pieces { get; }
+        internal List<Placement> MutablePieces { get { return _pieces; } }
+
+        /// <summary>지정 주문의 제작판과 외부에서 변경할 수 없는 배치 목록을 초기화한다.</summary>
+        internal Board(int spell)
+        {
+            Spell = spell;
+            Pieces = _pieces.AsReadOnly();
+        }
     }
 
     public sealed class Enemy
     {
+        private readonly int[] _pattern;
+
         public string Name { get; internal set; }
         public int Health { get; internal set; }
         public int MaxHealth { get; internal set; }
-        public int[] Pattern { get; internal set; }
-        public int Intent { get { return Pattern[ActionCount % Pattern.Length]; } }
+
+        public int Intent { get { return _pattern[ActionCount % _pattern.Length]; } }
         internal int ActionCount;
+
+        /// <summary>이름, 체력과 공격 패턴으로 적의 전투 상태를 초기화한다.</summary>
+        internal Enemy(string name, int health, int[] pattern)
+        {
+            Name = name; Health = health; MaxHealth = health; _pattern = pattern;
+        }
     }
 
     private static readonly int[][] SPELL_MASKS = { new[] { 4, 0, 0, 15, 0, 0, 0, 0, 0 }, new[] { 15, 0, 0, 1, 0, 0, 0, 0, 0 }, new[] { 15, 0, 0, 15, 15, 0, 0, 0, 0 }, new[] { 15, 15, 0, 15, 15, 0, 0, 0, 0 } };
@@ -47,10 +68,15 @@ public sealed class SpellGame
     private readonly List<Card> _draw = new List<Card>();
     private readonly List<Card> _discard = new List<Card>();
     private int _nextId;
-    public readonly List<Card> Hand = new List<Card>();
-    public readonly List<Enemy> Enemies = new List<Enemy>();
-    public readonly List<int> Spells = new List<int>();
-    public readonly Board[] Boards = { new Board(), new Board(), new Board(), new Board() };
+    private readonly List<Card> _hand = new List<Card>();
+    private readonly List<Enemy> _enemies = new List<Enemy>();
+    private readonly List<int> _spells = new List<int>();
+    private readonly Board[] _boards = { new Board(0), new Board(1), new Board(2), new Board(3) };
+
+    public ReadOnlyCollection<Card> Hand { get; }
+    public ReadOnlyCollection<Enemy> Enemies { get; }
+    public ReadOnlyCollection<int> Spells { get; }
+    public ReadOnlyCollection<Board> Boards { get; }
     public Phase CurrentPhase { get; private set; } = Phase.Title;
     public int Health { get; private set; }
     public int Block { get; private set; }
@@ -62,11 +88,17 @@ public sealed class SpellGame
     public int DiscardCount { get { return _discard.Count; } }
     public int CraftCount { get { int count = 0; foreach (Board board in Boards) count += board.Pieces.Count; return count; } }
 
+    /// <summary>카드, 적, 도안과 제작판의 읽기 전용 목록을 연결한다.</summary>
+    public SpellGame()
+    {
+        Hand = _hand.AsReadOnly(); Enemies = _enemies.AsReadOnly(); Spells = _spells.AsReadOnly(); Boards = Array.AsReadOnly(_boards);
+    }
+
     /// <summary>새 게임의 체력, 카드 및 도안을 초기화하고 첫 전투를 시작한다.</summary>
     public void StartGame()
     {
-        _owned.Clear(); Spells.Clear(); _nextId = 0; Health = 50; Battle = 0;
-        Spells.Add(0); Spells.Add(1);
+        _owned.Clear(); _spells.Clear(); _nextId = 0; Health = 50; Battle = 0;
+        _spells.Add(0); _spells.Add(1);
         for (int i = 0; i < 4; i++) AddCard(Shape.Square, Effect.None);
         for (int i = 0; i < 4; i++) AddCard(Shape.Triangle, Effect.None);
         for (int i = 0; i < 2; i++) AddCard(Shape.Rectangle, Effect.None);
@@ -86,8 +118,9 @@ public sealed class SpellGame
     /// <summary>다음 전투의 적과 덱을 준비하고 첫 턴을 시작한다.</summary>
     private void StartBattle()
     {
-        Battle++; Turn = 0; Block = 0; Target = 0; Enemies.Clear(); Hand.Clear(); _discard.Clear(); _draw.Clear();
-        for (int i = 0; i < Boards.Length; i++) { Boards[i].Pieces.Clear(); Boards[i].Spell = i; }
+        Battle++; Turn = 0; Block = 0; Target = 0; _enemies.Clear(); _hand.Clear(); _discard.Clear(); _draw.Clear();
+        foreach (Board board in Boards) board.MutablePieces.Clear();
+        foreach (Card card in _owned) card.HasPersisted = false;
         _draw.AddRange(_owned); Shuffle(_draw);
         GuaranteeOpeningShape(Shape.Square, _draw.Count - 1); GuaranteeOpeningShape(Shape.QuarterTriangle, _draw.Count - 2);
         if (Battle == 1) AddEnemy(0);
@@ -102,7 +135,7 @@ public sealed class SpellGame
     /// <summary>적 종류에 따라 체력과 공격 패턴을 설정한다.</summary>
     private void AddEnemy(int kind)
     {
-        Enemies.Add(kind == 0 ? new Enemy { Name = "잉크 하수인", Health = 12, MaxHealth = 12, Pattern = new[] { 4 } } : kind == 1 ? new Enemy { Name = "거대 잉크", Health = 26, MaxHealth = 26, Pattern = new[] { 2, 8 } } : new Enemy { Name = "서고의 수호자", Health = 60, MaxHealth = 60, Pattern = new[] { 4, 7, 12 } });
+        _enemies.Add(kind == 0 ? new Enemy("잉크 하수인", 12, new[] { 4 }) : kind == 1 ? new Enemy("거대 잉크", 26, new[] { 2, 8 }) : new Enemy("서고의 수호자", 60, new[] { 4, 7, 12 }));
     }
 
     /// <summary>목록을 제자리에서 무작위로 섞는다.</summary>
@@ -131,15 +164,23 @@ public sealed class SpellGame
         {
             if (_draw.Count == 0) { _draw.AddRange(_discard); _discard.Clear(); Shuffle(_draw); }
             if (_draw.Count == 0) break;
-            int last = _draw.Count - 1; Hand.Add(_draw[last]); _draw.RemoveAt(last);
+            int last = _draw.Count - 1; _hand.Add(_draw[last]); _draw.RemoveAt(last);
         }
+    }
+
+    /// <summary>카드를 버림 더미로 보내고 다음 순환을 위해 잔상 시전 이력을 초기화한다.</summary>
+    private void Discard(Card card)
+    {
+        card.HasPersisted = false;
+        _discard.Add(card);
     }
 
     /// <summary>손패를 버리고 생존 적의 공격을 순서대로 처리한다.</summary>
     public void EndTurn()
     {
         if (CurrentPhase != Phase.Combat) return;
-        _discard.AddRange(Hand); Hand.Clear();
+        foreach (Card card in Hand) Discard(card);
+        _hand.Clear();
         foreach (Enemy enemy in Enemies)
         {
             if (enemy.Health <= 0) continue;
@@ -147,13 +188,6 @@ public sealed class SpellGame
             if (Health <= 0) { Health = 0; CurrentPhase = Phase.Defeat; return; }
         }
         Block = 0; StartTurn();
-    }
-
-    /// <summary>빈 제작판의 보유 도안을 변경한다.</summary>
-    public bool SetSpell(int board, int spell)
-    {
-        if (CurrentPhase != Phase.Combat || board < 0 || board >= Boards.Length || !Spells.Contains(spell) || Boards[board].Pieces.Count != 0) return false;
-        Boards[board].Spell = spell; return true;
     }
 
     /// <summary>지정 도형의 격자 점유 마스크를 계산한다. 범위 밖이면 null을 반환한다.</summary>
@@ -180,7 +214,7 @@ public sealed class SpellGame
     /// <summary>배치가 불가능한 이유를 반환하고, 가능하면 null을 반환한다.</summary>
     public string PlacementIssue(int boardIndex, Card card, int x, int y, int rotation, Placement ignored = null)
     {
-        if (CurrentPhase != Phase.Combat || boardIndex < 0 || boardIndex >= Boards.Length || card == null) return "지금은 배치할 수 없습니다";
+        if (CurrentPhase != Phase.Combat || boardIndex < 0 || boardIndex >= Boards.Count || card == null) return "지금은 배치할 수 없습니다";
         if (!Spells.Contains(Boards[boardIndex].Spell)) return "보유하지 않은 도안입니다";
         Board board = Boards[boardIndex]; int[] candidate = Mask(card.Shape, x, y, rotation);
         if (candidate == null) return "도형이 도안 범위를 벗어납니다";
@@ -214,31 +248,35 @@ public sealed class SpellGame
     public bool Place(int board, Card card, int x, int y, int rotation)
     {
         if (PlacementsLeft <= 0 || !Hand.Contains(card) || !CanPlace(board, card, x, y, rotation)) return false;
-        Hand.Remove(card); PlacementsLeft--; Boards[board].Pieces.Add(new Placement { Card = card, X = x, Y = y, Rotation = rotation, Turn = Turn }); return true;
+        _hand.Remove(card); PlacementsLeft--; Boards[board].MutablePieces.Add(new Placement { Card = card, X = x, Y = y, Rotation = rotation, Turn = Turn, CanRefund = true }); return true;
     }
 
     /// <summary>배치된 조각을 비용 없이 다른 위치 또는 판으로 옮긴다.</summary>
     public bool Move(int source, Placement piece, int destination, int x, int y, int rotation)
     {
-        if (source < 0 || source >= Boards.Length || piece == null || !Boards[source].Pieces.Contains(piece) || !CanPlace(destination, piece.Card, x, y, rotation, source == destination ? piece : null)) return false;
-        Boards[source].Pieces.Remove(piece); piece.X = x; piece.Y = y; piece.Rotation = rotation; Boards[destination].Pieces.Add(piece); return true;
+        if (source < 0 || source >= Boards.Count || piece == null || !Boards[source].Pieces.Contains(piece) || !CanPlace(destination, piece.Card, x, y, rotation, source == destination ? piece : null)) return false;
+        Boards[source].MutablePieces.Remove(piece); piece.X = x; piece.Y = y; piece.Rotation = rotation; Boards[destination].MutablePieces.Add(piece); return true;
     }
 
-    /// <summary>배치 조각을 손패로 회수하고 이번 턴에 사용한 배치 횟수만 반환한다.</summary>
+    /// <summary>배치 조각을 손패로 회수하고 이번 턴의 미시전 배치 비용만 반환한다.</summary>
     public bool Recall(int board, Placement piece)
     {
-        if (CurrentPhase != Phase.Combat || board < 0 || board >= Boards.Length || piece == null || Hand.Count >= 7 || !Boards[board].Pieces.Remove(piece)) return false;
-        Hand.Add(piece.Card); if (piece.Turn == Turn) PlacementsLeft++; return true;
+        if (CurrentPhase != Phase.Combat || board < 0 || board >= Boards.Count || piece == null || Hand.Count >= 7 || !Boards[board].MutablePieces.Remove(piece)) return false;
+        _hand.Add(piece.Card); if (piece.Turn == Turn && piece.CanRefund) PlacementsLeft++; return true;
     }
 
     /// <summary>판의 현재 턴 조각은 회수하고 이전 턴 조각은 버린다.</summary>
     public bool Abandon(int board)
     {
-        if (CurrentPhase != Phase.Combat || board < 0 || board >= Boards.Length) return false;
+        if (CurrentPhase != Phase.Combat || board < 0 || board >= Boards.Count) return false;
         Board b = Boards[board]; int current = 0; foreach (Placement p in b.Pieces) if (p.Turn == Turn) current++;
         if (Hand.Count + current > 7) return false;
-        foreach (Placement p in b.Pieces) { if (p.Turn == Turn) Hand.Add(p.Card); else _discard.Add(p.Card); }
-        PlacementsLeft += current; b.Pieces.Clear(); return true;
+        foreach (Placement p in b.Pieces)
+        {
+            if (p.Turn == Turn) { _hand.Add(p.Card); if (p.CanRefund) PlacementsLeft++; }
+            else Discard(p.Card);
+        }
+        b.MutablePieces.Clear(); return true;
     }
 
     /// <summary>살아 있는 적을 단일 대상 주문의 대상으로 선택한다.</summary>
@@ -247,7 +285,7 @@ public sealed class SpellGame
     /// <summary>지정 도안이 모든 삼각 구역을 빈틈없이 채웠는지 반환한다.</summary>
     public bool IsComplete(int boardIndex)
     {
-        if (boardIndex < 0 || boardIndex >= Boards.Length || !Spells.Contains(boardIndex)) return false;
+        if (boardIndex < 0 || boardIndex >= Boards.Count || !Spells.Contains(boardIndex)) return false;
         int[] filled = new int[9];
         foreach (Placement piece in Boards[boardIndex].Pieces)
         {
@@ -290,8 +328,9 @@ public sealed class SpellGame
         for (int i = board.Pieces.Count - 1; i >= 0; i--)
         {
             Placement piece = board.Pieces[i];
-            if (piece.Card.Effect == Effect.Afterimage && !piece.HasPersisted) piece.HasPersisted = true;
-            else { _discard.Add(piece.Card); board.Pieces.RemoveAt(i); }
+            piece.CanRefund = false;
+            if (piece.Card.Effect == Effect.Afterimage && !piece.HasPersisted) piece.Card.HasPersisted = true;
+            else { Discard(piece.Card); board.MutablePieces.RemoveAt(i); }
         }
         if (!alive) { if (Battle == 6) CurrentPhase = Phase.Victory; else { Health = Math.Min(50, Health + 6); CurrentPhase = Phase.Reward; } }
         return true;
@@ -305,7 +344,7 @@ public sealed class SpellGame
         if (reward == 1) AddCard(Shape.Square, Effect.Guard);
         if (reward == 2) AddCard(Shape.Rectangle, Effect.Resonance);
         if (reward == 3) AddCard(Shape.QuarterTriangle, Effect.Afterimage);
-        if (reward >= 4) Spells.Add(reward - 2);
+        if (reward >= 4) _spells.Add(reward - 2);
         StartBattle(); return true;
     }
 }
