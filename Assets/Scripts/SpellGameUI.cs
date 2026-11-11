@@ -1,50 +1,99 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 using UnityEngine;
 
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
-using UnityEngine.InputSystem.UI;
 
 /// <summary>주문 조각 PoC의 화면과 입력을 전투 상태에 연결한다.</summary>
 public sealed class SpellGameUI : MonoBehaviour
 {
+    private const float LEGACY_SCALE = 1.5f;
+    private const float LEGACY_CELL = 84f;
+    private const float TOAST_SECONDS = 2.2f;
+    private const float CURSOR_HINT_OFFSET = 24f;
+    private const float CURSOR_HINT_PADDING = 24f;
+    private const float TAB_HEIGHT = 36f;
+    private const int PLAYER_MAX_HEALTH = 50;
+    private const int BATTLE_COUNT = 6;
+    private const float ENEMY_BOTTOM = 800f;
+    private const float ENEMY_BAR_WIDTH = 320f;
+    private const float ENEMY_NARROW_BAR_WIDTH = 280f;
+    private const float MENU_GAP = 4f;
+    private static readonly bool ONBOARDING_ENABLED = false;
     private static readonly string[] SPELL_NAMES = { "불씨", "방벽", "번개", "유성" };
     private static readonly string[] SPELL_EFFECTS = { "단일 피해 6", "방어 7", "단일 피해 12", "전체 피해 10" };
-    private static readonly string[] REWARD_NAMES = { "불꽃 삼각형\n공격 피해 +2", "수호 정사각형\n방어 +3", "공명 직사각형\n3칸 이상: 배치 +1", "잔상 1/4 삼각형\n시전 후 1회 유지", "도안: 번개\n단일 피해 12", "도안: 유성\n전체 피해 10" };
-    private static readonly Color[] PATTERN_COLORS = { new Color(1f, 0.75f, 0.3f), new Color(0.4f, 0.8f, 1f), new Color(0.8f, 0.65f, 1f), new Color(1f, 0.5f, 0.48f) };
+    private static readonly int[] SPELL_BASE = { 6, 7, 12, 10 };
+    private static readonly string[] REWARD_NAMES = { "불꽃 삼각형\n공격 피해 +2", "수호 정사각형\n방어 +3", "공명 직사각형\n3칸 이상: 조각 1장 뽑기", "잔상 1/4 삼각형\n시전 후 1회 유지", "도안: 번개\n단일 피해 12", "도안: 유성\n전체 피해 10" };
     private static readonly IReadOnlyList<Vector2Int>[] PATTERN_CELLS = CreatePatternCells();
+    private static readonly Vector2 MESSAGE_POSITION = new Vector2(550, -850);
+    private static readonly Vector2 FEEDBACK_POSITION = new Vector2(1400, -140);
+    private static readonly float[][] ENEMY_X = { new[] { 1400f }, new[] { 1180f, 1620f }, new[] { 1080f, 1400f, 1720f } };
+    private static readonly Vector2 NORMAL_ENEMY_SIZE = new Vector2(150, 190);
+    private static readonly Vector2 LARGE_ENEMY_SIZE = new Vector2(190, 230);
+    private static readonly Vector2 BOSS_SIZE = new Vector2(300, 380);
+
+    [Header("화면 연결")]
+    [SerializeField] private GameObject _canvas;
+    [SerializeField] private RectTransform _content;
+    [SerializeField] private SpellCombatScreen _combatScreen;
+    [SerializeField] private SpellTitleScreen _titleScreen;
+    [SerializeField] private SpellRewardScreen _rewardScreen;
+    [SerializeField] private SpellResultScreen _resultScreen;
+    [SerializeField] private SpellPauseMenu _pauseMenu;
+    [SerializeField] private SpellHelpPanel _helpPanel;
+    [SerializeField] private SpellPileViewer _pileViewer;
+
+    [Header("상태 색")]
+    [SerializeField] private Color[] _patternColors = { new Color(0.957f, 0.788f, 0.365f), new Color(0.902f, 0.922f, 0.941f), new Color(0.725f, 0.89f, 0.42f), new Color(0.949f, 0.553f, 0.698f) };
+    [SerializeField] private Color _flameColor = new Color(0.878f, 0.478f, 0.247f);
+    [SerializeField] private Color _guardColor = new Color(0.31f, 0.584f, 0.839f);
+    [SerializeField] private Color _resonanceColor = new Color(0.655f, 0.467f, 0.851f);
+    [SerializeField] private Color _afterimageColor = new Color(0.333f, 0.78f, 0.702f);
+    [SerializeField] private Color[] _enemyColors = { new Color(0.478f, 0.416f, 0.549f), new Color(0.373f, 0.498f, 0.447f), new Color(0.549f, 0.431f, 0.369f) };
+    [SerializeField] private Color _textColor = new Color(0.945f, 0.922f, 0.867f);
+    [SerializeField] private Color _subColor = new Color(0.741f, 0.706f, 0.627f);
+    [SerializeField] private Color _dimColor = new Color(0.224f, 0.267f, 0.416f);
+    [SerializeField] private Color _dangerColor = new Color(0.878f, 0.376f, 0.353f);
+    [SerializeField] private Color _warnColor = new Color(0.949f, 0.722f, 0.294f);
+
     private readonly SpellGame _game = new SpellGame();
     private readonly List<int> _rewards = new List<int>();
-    private readonly Vector2Int[] _patternPositions = { new Vector2Int(0, 0), new Vector2Int(1, 0), new Vector2Int(2, 0), new Vector2Int(4, 0) };
-    private readonly bool[] _patternPlaced = new bool[4];
+    private readonly SpellPatternLayout _layout = new SpellPatternLayout();
     private readonly System.Random _random = new System.Random();
     private RectTransform _root;
-    private GameObject _canvas;
     private Font _font;
-    private UnityEngine.UI.Text _previewHint;
-    private RectTransform _dragGhost;
     private SpellBoardGraphic _boardGraphic;
+    private RectTransform _dragGhost;
+    private RectTransform _aimElbow;
+    private string _hintText = "";
+
     private SpellGame.Card _selectedCard;
     private SpellGame.Placement _selectedPiece;
     private int _selectedBoard = -1;
     private int _rotation;
     private string _message = "";
     private SpellGame.Phase _renderedPhase = (SpellGame.Phase)(-1);
+
     private string _feedback = "";
     private Color _feedbackColor;
     private float _feedbackUntil;
-    private CanvasGroup _feedbackGroup;
-    private RectTransform _feedbackRect;
-    private readonly List<UnityEngine.UI.Image> _impactImages = new List<UnityEngine.UI.Image>();
+    private int _feedbackVersion;
+    private int _feedbackShownVersion;
     private int _impactTarget = -1;
     private bool _impactAll;
+
     private bool _showHelp;
+    private int _openPile = -1;
     private bool _showPauseMenu;
+    private int _pendingCast = -1;
+    private bool _castDragging;
+    private int _castDragBoard = -1;
+    private int _hoverEnemy = -1;
+
     private bool _onboardingComplete;
     private bool _onboardingPlacementExplained;
-    private int _pendingCast = -1;
     private string _onboardingStep = "";
     private float _onboardingActivity;
     private RectTransform _onboardingGhost;
@@ -53,6 +102,10 @@ public sealed class SpellGameUI : MonoBehaviour
     private int _onboardingGhostRotation;
     private Vector2 _onboardingGhostStart;
     private Vector2 _onboardingGhostEnd;
+
+    public SpellGame.Card SelectedCard { get { return _selectedCard; } }
+    public int Rotation { get { return _rotation; } }
+    public bool CanInteract { get { return isActiveAndEnabled && !_showPauseMenu && !_showHelp && _openPile < 0 && _game.CurrentPhase == SpellGame.Phase.Combat; } }
 
     /// <summary>논리 도안 마스크에서 점유 칸 좌표를 한 번 생성해 읽기 전용 목록으로 반환한다.</summary>
     private static IReadOnlyList<Vector2Int>[] CreatePatternCells()
@@ -68,32 +121,20 @@ public sealed class SpellGameUI : MonoBehaviour
         return patterns;
     }
 
-    /// <summary>첫 장면에서 게임 화면을 자동으로 생성한다.</summary>
-    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
-    private static void Bootstrap()
-    {
-        new GameObject("SpellGameUI").AddComponent<SpellGameUI>();
-    }
-
     void Awake()
     {
         _font = Font.CreateDynamicFontFromOSFont(new[] { "Malgun Gothic", "Arial" }, 24);
-        GameObject canvas = new GameObject("Spell Canvas", typeof(RectTransform), typeof(Canvas), typeof(UnityEngine.UI.CanvasScaler), typeof(UnityEngine.UI.GraphicRaycaster));
-        _canvas = canvas;
-        canvas.transform.SetParent(transform, false);
-        canvas.GetComponent<Canvas>().renderMode = RenderMode.ScreenSpaceOverlay;
-        UnityEngine.UI.CanvasScaler scaler = canvas.GetComponent<UnityEngine.UI.CanvasScaler>();
-        scaler.uiScaleMode = UnityEngine.UI.CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        scaler.referenceResolution = new Vector2(1280, 720);
-        scaler.screenMatchMode = UnityEngine.UI.CanvasScaler.ScreenMatchMode.Expand;
-        RectTransform canvasRect = canvas.GetComponent<RectTransform>();
-        RectTransform background = Panel(canvasRect, 0, 0, 0, 0, new Color(0.095f, 0.12f, 0.16f));
-        background.anchorMin = Vector2.zero; background.anchorMax = Vector2.one; background.sizeDelta = Vector2.zero;
-        background.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
-        _root = Element("Content", canvasRect, 0, 0, 1280, 720);
+        // 꺼 둔 첫 주문 온보딩만 기존 1280×720 좌표로 그린다. 전투 화면 바로 위, 오버레이 아래에 둔다. 새 화면 연결은 다음 작업이다.
+        _root = Element("Onboarding Layer", _content, 0, 0, 1280, 720);
         _root.anchorMin = _root.anchorMax = _root.pivot = new Vector2(0.5f, 0.5f);
         _root.anchoredPosition = Vector2.zero;
-        if (FindFirstObjectByType<EventSystem>() == null) new GameObject("EventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule));
+        _root.localScale = Vector3.one * LEGACY_SCALE;
+        _root.SetSiblingIndex(_combatScreen.transform.GetSiblingIndex() + 1);
+        _boardGraphic = _combatScreen.Board;
+        _boardGraphic.Setup(this, _game, _layout);
+        SetupCombatScreen();
+        SetupOtherScreens();
+        SetupOverlays();
         Render();
     }
 
@@ -109,76 +150,115 @@ public sealed class SpellGameUI : MonoBehaviour
     {
         ClearSelection();
         _pendingCast = -1;
+        _openPile = -1;
+        _castDragging = false;
         if (_boardGraphic != null) _boardGraphic.CancelDrag();
-        if (_dragGhost != null) Destroy(_dragGhost.gameObject);
-        _dragGhost = null;
+        HideDragGhost();
         if (_canvas != null) _canvas.SetActive(false);
     }
 
     void Update()
     {
         UpdateFeedback();
-        UpdateOnboarding();
+        UpdateCursorHint();
+        if (ONBOARDING_ENABLED) UpdateOnboarding();
         if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
         {
-            if (_showPauseMenu) _showPauseMenu = false;
-            else { _showHelp = false; _showPauseMenu = true; _pendingCast = -1; _message = ""; ClearSelection(); _dragGhost = null; }
+            if (_combatScreen.MoreMenu.IsOpen) { _combatScreen.MoreMenu.Close(); return; }
+            if (_openPile >= 0) _openPile = -1;
+            else if (_showPauseMenu) _showPauseMenu = false;
+            else OpenPauseState();
             _onboardingActivity = Time.unscaledTime; Render(); return;
         }
-        if (_showPauseMenu) return;
+        if (_showPauseMenu || _openPile >= 0 || _showHelp) return;
         if (_game.CurrentPhase != SpellGame.Phase.Combat) return;
-        if (_showHelp)
+        bool rotate = Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame;
+        bool rightClick = Mouse.current != null && Mouse.current.rightButton.wasPressedThisFrame;
+        if (!rotate && !rightClick) return;
+        if (_boardGraphic.IsDraggingPattern) _boardGraphic.RotatePatternDrag();
+        else if (_selectedCard != null)
         {
-            return;
-        }
-        if ((Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame) || (Mouse.current != null && Mouse.current.rightButton.wasPressedThisFrame))
-        {
-            if (_selectedCard != null)
+            _rotation = (_rotation + 1) % 4;
+            if (_dragGhost == null) Render();
+            else
             {
-                _rotation = (_rotation + 1) % 4;
-                if (_dragGhost == null) Render();
-                else
-                {
-                    _dragGhost.localRotation = Quaternion.Euler(0, 0, -90 * _rotation);
-                    _boardGraphic.RefreshPreview();
-                }
+                _dragGhost.localRotation = Quaternion.Euler(0, 0, -90 * _rotation);
+                _boardGraphic.RefreshPreview();
             }
         }
+        else if (rightClick && _pendingCast >= 0) { _pendingCast = -1; Render(); }
     }
 
-    /// <summary>시전 안내를 짧게 띄우고 입력을 막지 않으며 서서히 사라지게 한다.</summary>
+    /// <summary>일시정지 메뉴를 열면서 조준·선택·드래그를 정리한다.</summary>
+    private void OpenPauseState()
+    {
+        _showHelp = false; _showPauseMenu = true; _pendingCast = -1; _castDragging = false; _message = "";
+        ClearSelection(); HideDragGhost();
+    }
+
+    /// <summary>전투 화면의 고정 버튼·슬롯에 동작과 입력 대상을 한 번만 연결한다.</summary>
+    private void SetupCombatScreen()
+    {
+        SpellCombatScreen screen = _combatScreen;
+        screen.Help.SetAction(() => { if (!CanInteract) return; _showHelp = true; Render(); });
+        screen.Menu.SetAction(() => { OpenPauseState(); Render(); });
+        screen.DrawPile.Setup("드로우 덱", () => OpenPile(0));
+        screen.DiscardPile.Setup("묘지", () => OpenPile(1));
+        screen.EndTurn.SetAction(() => { if (CanInteract) EndPlayerTurn(); });
+        for (int i = 0; i < screen.Tabs.Length; i++) { int index = i; screen.Tabs[i].Setup(this, i, () => OpenPatternMenu(index)); }
+        for (int i = 0; i < screen.CastButtons.Length; i++) screen.CastButtons[i].Setup(this, i);
+        for (int i = 0; i < screen.Enemies.Length; i++) screen.Enemies[i].Setup(this, i, ClickEnemy);
+        _aimElbow = Instantiate(screen.AimLine, screen.AimLine.parent);
+        _aimElbow.name = "Aim Line Elbow";
+    }
+
+    /// <summary>일시정지·도움말·더미 열람 오버레이의 버튼 동작을 연결한다.</summary>
+    private void SetupOverlays()
+    {
+        _pauseMenu.Continue.SetAction(() => { _showPauseMenu = false; _onboardingActivity = Time.unscaledTime; Render(); });
+        _pauseMenu.Title.SetAction(() => { _game.ReturnToTitle(); _showPauseMenu = false; _showHelp = false; _pendingCast = -1; _feedbackUntil = 0; ClearSelection(); Render(); });
+        _pauseMenu.Quit.SetAction(Application.Quit);
+        _helpPanel.Close.SetAction(() => { _showHelp = false; Render(); });
+    }
+
+    /// <summary>드로우 덱 또는 묘지 열람을 연다.</summary>
+    private void OpenPile(int pile)
+    {
+        if (!CanInteract) return;
+        _pendingCast = -1; ClearSelection(); _openPile = pile; Render();
+    }
+
+    /// <summary>시전 결과의 적 강조를 시간에 따라 흐리게 한다.</summary>
     private void UpdateFeedback()
     {
-        if (_feedbackGroup == null) return;
+        if (_game.CurrentPhase != SpellGame.Phase.Combat) return;
         float remaining = _feedbackUntil - Time.unscaledTime;
-        _feedbackGroup.alpha = Mathf.Clamp01(remaining / 0.35f);
-        _feedbackRect.localScale = Vector3.one * (1f + 0.04f * Mathf.Clamp01((remaining - 1.1f) / 0.25f));
-        foreach (UnityEngine.UI.Image image in _impactImages)
-        {
-            if (image == null) continue;
-            Color color = _feedbackColor; color.a = 0.32f * Mathf.Clamp01((remaining - 1.05f) / 0.45f); image.color = color;
-        }
-        if (remaining <= 0) { _feedbackGroup.gameObject.SetActive(false); _feedbackGroup = null; }
+        SpellEnemyView[] enemies = _combatScreen.Enemies;
+        float alpha = remaining > 0 ? 0.32f * Mathf.Clamp01((remaining - 1.05f) / 0.45f) : 0;
+        for (int i = 0; i < enemies.Length; i++) enemies[i].SetImpact(_feedbackColor, (_impactAll || i == _impactTarget) ? alpha : 0);
+    }
+
+    /// <summary>선택·조준·도안 이동 중에만 조작 안내를 커서 옆에 표시한다.</summary>
+    private void UpdateCursorHint()
+    {
+        RectTransform hint = _combatScreen.CursorHint;
+        bool show = CanInteract && Mouse.current != null && !string.IsNullOrEmpty(_hintText)
+            && (_selectedCard != null || _boardGraphic.IsDraggingPattern || _pendingCast >= 0 || _castDragging);
+        if (hint.gameObject.activeSelf != show) hint.gameObject.SetActive(show);
+        if (!show) return;
+        UnityEngine.UI.Text label = _combatScreen.CursorHintText;
+        if (label.text != _hintText) label.text = _hintText;
+        Vector2 point = ToLayer(Mouse.current.position.ReadValue());
+        Rect area = _combatScreen.DragLayer.rect;
+        float width = label.preferredWidth + CURSOR_HINT_PADDING;
+        hint.sizeDelta = new Vector2(width, hint.sizeDelta.y);
+        hint.anchoredPosition = new Vector2(Mathf.Min(point.x + CURSOR_HINT_OFFSET, area.width - width), Mathf.Max(point.y - CURSOR_HINT_OFFSET, -area.height + hint.sizeDelta.y));
     }
 
     /// <summary>주문 결과를 기록해 화면이 갱신된 뒤에도 일시적으로 표시한다.</summary>
     private void ShowFeedback(string message, Color color)
     {
-        _feedback = message; _feedbackColor = color; _feedbackUntil = Time.unscaledTime + 1.5f;
-    }
-
-    /// <summary>현재 화면 위에 시전 결과를 겹쳐 표시한다.</summary>
-    private void RenderFeedback()
-    {
-        _feedbackGroup = null;
-        if (Time.unscaledTime >= _feedbackUntil || string.IsNullOrEmpty(_feedback)) return;
-        _feedbackRect = Panel(_root, 390, 440, 500, 46, new Color(0.09f, 0.13f, 0.17f, 0.95f));
-        _feedbackRect.gameObject.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
-        _feedbackGroup = _feedbackRect.gameObject.AddComponent<CanvasGroup>();
-        _feedbackGroup.blocksRaycasts = false; _feedbackGroup.interactable = false;
-        RectTransform stripe = Panel(_feedbackRect, 0, 0, 6, 46, _feedbackColor);
-        stripe.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
-        Label(_feedbackRect, _feedback, 14, 0, 474, 46, 19);
+        _feedback = message; _feedbackColor = color; _feedbackUntil = Time.unscaledTime + 1.5f; _feedbackVersion++;
     }
 
     /// <summary>현재 선택과 회전 상태를 해제한다.</summary>
@@ -209,112 +289,333 @@ public sealed class SpellGameUI : MonoBehaviour
     }
 
     /// <summary>텍스트와 클릭 동작을 가진 버튼을 만든다.</summary>
-    private void Button(RectTransform parent, string caption, float x, float y, float width, float height, Action action, Color? color = null, int fontSize = 18)
+    private RectTransform Button(RectTransform parent, string caption, float x, float y, float width, float height, Action action, Color? color = null, int fontSize = 18)
     {
         RectTransform rect = Panel(parent, x, y, width, height, color ?? new Color(0.24f, 0.31f, 0.39f));
         UnityEngine.UI.Button button = rect.gameObject.AddComponent<UnityEngine.UI.Button>();
         button.onClick.AddListener(() => action()); Label(rect, caption, 4, 2, width - 8, height - 4, fontSize);
+        return rect;
     }
 
-    /// <summary>현재 게임 단계에 맞춰 화면 요소를 갱신한다.</summary>
+    /// <summary>현재 게임 단계에 맞춰 화면을 갱신한다. 전투 화면은 다시 만들지 않고 값만 갱신한다.</summary>
     private void Render()
     {
         if (_pendingCast >= 0 && (_game.CurrentPhase != SpellGame.Phase.Combat || !_game.IsComplete(_pendingCast))) _pendingCast = -1;
-        if (_boardGraphic != null) _boardGraphic.CancelDrag();
+        _boardGraphic.CancelDrag();
         if (_dragGhost != null) ClearSelection();
-        _dragGhost = null; _boardGraphic = null; _previewHint = null;
+        HideDragGhost(); HideAim();
+        _castDragging = false; _hoverEnemy = -1;
+        _combatScreen.Tooltip.Hide();
+        _combatScreen.MoreMenu.Close();
+        SpellGame.Phase phase = _game.CurrentPhase;
+        bool combat = phase == SpellGame.Phase.Combat;
+        bool result = phase == SpellGame.Phase.Victory || phase == SpellGame.Phase.Defeat;
+        _combatScreen.gameObject.SetActive(combat);
+        _titleScreen.gameObject.SetActive(phase == SpellGame.Phase.Title);
+        _rewardScreen.gameObject.SetActive(phase == SpellGame.Phase.Reward);
+        _resultScreen.gameObject.SetActive(result);
+        if (combat) RefreshCombat();
+        else if (phase == SpellGame.Phase.Reward) RefreshRewards();
+        else if (result) _resultScreen.Bind(phase == SpellGame.Phase.Victory ? "승리" : "패배");
+        RenderOnboardingLayer(combat);
+        RefreshOverlays();
+        _renderedPhase = phase;
+    }
+
+    /// <summary>타이틀 시작·결과 다시 시작·보상 건너뛰기 버튼의 동작을 연결한다.</summary>
+    private void SetupOtherScreens()
+    {
+        _titleScreen.StartButton.SetAction(StartNewGame);
+        _resultScreen.Restart.SetAction(StartNewGame);
+        _rewardScreen.Skip.SetAction(() => ChooseReward(-1));
+    }
+
+    /// <summary>새 게임을 시작하고 도안 배치와 선택을 초기화한다.</summary>
+    private void StartNewGame()
+    {
+        _game.StartGame(); ResetPatterns(); ClearSelection(); Render();
+    }
+
+    /// <summary>보상을 고르거나(-1은 건너뛰기) 다음 전투로 넘어간다.</summary>
+    private void ChooseReward(int reward)
+    {
+        if (_game.ChooseReward(reward)) { ClearSelection(); _message = ""; Render(); }
+    }
+
+    /// <summary>꺼 둔 첫 주문 온보딩 층을 비우고, 켜져 있으면 전투 중에만 다시 그린다.</summary>
+    private void RenderOnboardingLayer(bool combat)
+    {
         _onboardingGhost = null; _onboardingGhostGroup = null; _onboardingGhostIcon = null;
-        _impactImages.Clear();
         foreach (Transform child in _root) { child.gameObject.SetActive(false); Destroy(child.gameObject); }
-        Panel(_root, 0, 0, 1280, 720, new Color(0.095f, 0.12f, 0.16f));
-        if (_game.CurrentPhase == SpellGame.Phase.Title)
-        {
-            Label(_root, "주문 조각", 340, 170, 600, 90, 48);
-            RectTransform divider = Panel(_root, 500, 322, 280, 2, new Color(0.80f, 0.65f, 0.38f));
-            divider.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
-            Button(_root, "시작", 520, 360, 240, 64, () => { _game.StartGame(); ResetPatterns(); ClearSelection(); Render(); });
-            Label(_root, "도형 드래그 → 도안 완성 → 시전 버튼\nR 또는 우클릭으로 회전", 300, 502, 680, 65, 17);
-        }
-        else if (_game.CurrentPhase == SpellGame.Phase.Reward) RenderRewards();
-        else if (_game.CurrentPhase == SpellGame.Phase.Victory || _game.CurrentPhase == SpellGame.Phase.Defeat)
-        {
-            Label(_root, _game.CurrentPhase == SpellGame.Phase.Victory ? "승리" : "패배", 340, 190, 600, 90, 48);
-            Button(_root, "다시 시작", 520, 350, 240, 64, () => { _game.StartGame(); ResetPatterns(); ClearSelection(); Render(); });
-        }
-        else RenderCombat();
-        RenderFeedback();
-        if (_showHelp) RenderHelp();
-        if (_showPauseMenu) RenderPauseMenu();
-        _renderedPhase = _game.CurrentPhase;
+        bool show = ONBOARDING_ENABLED && combat && !_onboardingComplete;
+        _root.gameObject.SetActive(show);
+        if (show) RenderOnboarding();
     }
 
-    /// <summary>화면 입력을 가리고 계속하기, 타이틀 전환과 게임 종료 메뉴를 표시한다.</summary>
-    private void RenderPauseMenu()
+    /// <summary>일시정지·도움말·더미 열람 오버레이를 상태에 맞게 켜고 내용을 갱신한다.</summary>
+    private void RefreshOverlays()
     {
-        Panel(_root, 0, 0, 1280, 720, new Color(0, 0, 0, 0.8f));
-        RectTransform panel = Panel(_root, 435, 175, 410, 370, new Color(0.18f, 0.24f, 0.30f));
-        Label(panel, "일시 정지", 20, 22, 370, 50, 28);
-        Button(panel, "계속하기", 70, 100, 270, 55, () => { _showPauseMenu = false; _onboardingActivity = Time.unscaledTime; Render(); });
-        Button(panel, "타이틀로 가기", 70, 170, 270, 55, () => { _game.ReturnToTitle(); _showPauseMenu = false; _showHelp = false; _pendingCast = -1; _feedbackUntil = 0; ClearSelection(); Render(); });
-        Button(panel, "게임 종료", 70, 240, 270, 55, () => Application.Quit());
-        Label(panel, "Esc로 돌아가기", 20, 315, 370, 30, 15);
+        _helpPanel.gameObject.SetActive(_showHelp);
+        _pauseMenu.gameObject.SetActive(_showPauseMenu);
+        _pileViewer.gameObject.SetActive(_openPile >= 0);
+        if (_openPile < 0) return;
+        Dictionary<string, int> summary = _game.GetPileSummary(_openPile == 0);
+        List<string> keys = new List<string>(summary.Keys);
+        keys.Sort(StringComparer.Ordinal);
+        System.Text.StringBuilder body = new System.Text.StringBuilder();
+        foreach (string key in keys)
+        {
+            string[] parts = key.Split(':');
+            SpellGame.Card card = new SpellGame.Card { Shape = (SpellGame.Shape)Enum.Parse(typeof(SpellGame.Shape), parts[0]), Effect = (SpellGame.Effect)Enum.Parse(typeof(SpellGame.Effect), parts[1]) };
+            body.Append(CardName(card).Replace("\n", " · ")).Append("  × ").Append(summary[key]).Append('\n');
+        }
+        if (keys.Count == 0) body.Append("비어 있습니다");
+        _pileViewer.Bind(_openPile == 0 ? "드로우 덱" : "묘지", body.ToString(), () => { _openPile = -1; Render(); });
     }
 
-    /// <summary>전투 상태와 공유 제작판, 손패 및 제어 버튼을 표시한다.</summary>
-    private void RenderCombat()
+    /// <summary>전투 화면의 모든 뷰에 현재 상태를 넣는다.</summary>
+    private void RefreshCombat()
     {
-        Label(_root, $"체력 {_game.Health}/50   ·   방어 {_game.Block}", 30, 5, 290, 30, 18, TextAnchor.MiddleLeft);
-        RectTransform playerTrack = Panel(_root, 30, 37, 250, 6, new Color(0.16f, 0.20f, 0.24f));
-        playerTrack.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
-        RectTransform playerFill = Panel(playerTrack, 0, 0, 250 * Mathf.Clamp01(_game.Health / 50f), 6, _game.Health <= 15 ? new Color(0.91f, 0.42f, 0.38f) : new Color(0.48f, 0.79f, 0.76f));
-        playerFill.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
-        Label(_root, $"전투 {_game.Battle}/6", 485, 4, 310, 38, 23);
-        Label(_root, $"턴 {_game.Turn}   ·   남은 배치 {_game.PlacementsLeft}", 925, 5, 320, 34, 19, TextAnchor.MiddleRight);
-        for (int i = 0; i < _game.Enemies.Count; i++)
+        SpellCombatScreen screen = _combatScreen;
+        EnsurePatterns();
+        screen.Battle.text = $"전투 {_game.Battle}/{BATTLE_COUNT}";
+        for (int i = 0; i < screen.ProgressDots.Length; i++)
+            screen.ProgressDots[i].color = i < _game.Battle - 1 ? _subColor : i == _game.Battle - 1 ? _textColor : _dimColor;
+        screen.PlayerStatus.Bind(_game.Health, PLAYER_MAX_HEALTH, _game.Block);
+        screen.Placement.gameObject.SetActive(false);
+        screen.BoardCount.gameObject.SetActive(false);
+        _boardGraphic.MarkStateDirty();
+        RefreshPatternControls();
+        RefreshPreviewBar();
+        RefreshEnemies();
+        screen.DrawPile.Bind(_game.DrawCount);
+        screen.DiscardPile.Bind(_game.DiscardCount);
+        for (int i = 0; i < screen.Hand.Length; i++)
         {
-            int index = i; SpellGame.Enemy enemy = _game.Enemies[i];
-            float enemyX = (_game.Enemies.Count == 1 ? 522 : 390) + i * 250;
-            Button(_root, $"{(_pendingCast >= 0 && enemy.Health > 0 ? "대상 선택 ▶ " : i == _game.Target && enemy.Health > 0 ? "▶ " : "")}{enemy.Name}\n체력 {Math.Max(0, enemy.Health)}/{enemy.MaxHealth}   다음 공격 {(enemy.Health > 0 ? enemy.Intent : 0)}", enemyX, 58, 235, 66, () => { if (_pendingCast >= 0) CastSpell(_pendingCast, index); else { _game.SelectTarget(index); Render(); } }, enemy.Health <= 0 ? new Color(0.18f, 0.18f, 0.2f) : _pendingCast >= 0 ? new Color(0.57f, 0.36f, 0.27f) : new Color(0.36f, 0.25f, 0.28f), 16);
-            RectTransform healthTrack = Panel(_root, enemyX + 8, 115, 219, 5, new Color(0.15f, 0.16f, 0.18f));
-            healthTrack.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
-            RectTransform healthFill = Panel(healthTrack, 0, 0, 219 * Mathf.Clamp01((float)enemy.Health / enemy.MaxHealth), 5, new Color(0.91f, 0.48f, 0.40f));
-            healthFill.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
-            if (Time.unscaledTime < _feedbackUntil && (_impactAll || index == _impactTarget))
-            {
-                RectTransform impact = Panel(_root, enemyX, 58, 235, 66, new Color(_feedbackColor.r, _feedbackColor.g, _feedbackColor.b, 0.3f));
-                UnityEngine.UI.Image image = impact.GetComponent<UnityEngine.UI.Image>();
-                image.raycastTarget = false; _impactImages.Add(image);
-            }
-        }
-        RenderSharedBoard();
-        Label(_root, $"뽑기 {_game.DrawCount}   버림 {_game.DiscardCount}   제작 중 {_game.CraftCount}     {_message}", 30, 486, 1000, 35, 18, TextAnchor.MiddleLeft);
-        for (int i = 0; i < _game.Hand.Count; i++)
-        {
+            bool has = i < _game.Hand.Count;
+            screen.Hand[i].gameObject.SetActive(has);
+            if (!has) continue;
             SpellGame.Card card = _game.Hand[i];
-            RectTransform cardPanel = Panel(_root, 30 + i * 148, 525, 144, 126, CardColor(card, card == _selectedCard));
-            UnityEngine.UI.Button cardButton = cardPanel.gameObject.AddComponent<UnityEngine.UI.Button>();
-            cardButton.onClick.AddListener(() => { _pendingCast = -1; _selectedCard = card; _selectedPiece = null; _selectedBoard = -1; _rotation = 0; _message = "R 또는 우클릭: 회전"; Render(); });
-            cardPanel.gameObject.AddComponent<SpellCardDrag>().Setup(this, card);
-            RectTransform iconRect = Element("Shape", cardPanel, card.Shape == SpellGame.Shape.Rectangle ? 0 : 36, 4, card.Shape == SpellGame.Shape.Rectangle ? 144 : 72, 72);
-            iconRect.gameObject.AddComponent<CanvasRenderer>();
-            SpellShapeGraphic icon = iconRect.gameObject.AddComponent<SpellShapeGraphic>();
-            icon.raycastTarget = false; icon.Shape = card.Shape;
-            Label(cardPanel, CardName(card), 2, 78, 140, 46, 14);
+            screen.Hand[i].Bind(this, card, DisplayName(card), EffectText(card), EffectColor(card.Effect), false, card == _selectedCard && _selectedPiece == null, SelectHandCard);
         }
         int incoming = 0;
         foreach (SpellGame.Enemy enemy in _game.Enemies) if (enemy.Health > 0) incoming += enemy.Intent;
-        int expectedDamage = Math.Max(0, incoming - _game.Block);
-        Label(_root, $"예상 피해 {expectedDamage}\n공격 {incoming} − 방어 {_game.Block}", 1055, 480, 200, 58, 15);
-        Button(_root, "턴 종료", 1080, 550, 160, 65, EndPlayerTurn, expectedDamage >= _game.Health ? new Color(0.59f, 0.27f, 0.27f) : new Color(0.32f, 0.40f, 0.49f));
-        Button(_root, "도움말 ?", 1100, 660, 140, 35, () => { _showHelp = true; Render(); }, null, 16);
-        RectTransform hint = Element("Preview Hint", _root, 30, 660, 1020, 30);
-        _previewHint = hint.gameObject.AddComponent<UnityEngine.UI.Text>();
-        _previewHint.font = _font; _previewHint.fontSize = 17; _previewHint.color = Color.white; _previewHint.raycastTarget = false;
-        SetPreviewHint(-1, -1, -1);
-        if (!_onboardingComplete) RenderOnboarding();
+        int expected = Math.Max(0, incoming - _game.Block);
+        screen.Incoming.text = $"적 공격 {incoming}  ·  받을 피해 {expected}";
+        screen.Incoming.color = expected >= _game.Health ? _dangerColor : _subColor;
+        screen.EndTurn.SetLabel($"{_game.Turn}턴 종료");
+        if (!string.IsNullOrEmpty(_message)) { screen.Toast.Show(_message, MESSAGE_POSITION, TOAST_SECONDS, _warnColor, true); _message = ""; }
+        else if (Time.unscaledTime < _feedbackUntil && _feedbackShownVersion != _feedbackVersion)
+        {
+            screen.Toast.Show(_feedback, FEEDBACK_POSITION, _feedbackUntil - Time.unscaledTime, _feedbackColor, false);
+            _feedbackShownVersion = _feedbackVersion;
+        }
+        SetPreviewHint(-1, Vector2Int.zero);
     }
 
-    /// <summary>첫 주문까지 현재 가능한 조작을 강조하고 설명과 고스트를 준비한다.</summary>
+    /// <summary>도안 탭과 완성 도안의 시전 버튼을 도안 위치·회전에 맞춰 놓는다.</summary>
+    private void RefreshPatternControls()
+    {
+        float cell = _boardGraphic.CellSize;
+        for (int i = 0; i < _combatScreen.Tabs.Length; i++)
+        {
+            bool show = _game.Spells.Contains(i) && _layout.IsPlaced(i);
+            _combatScreen.Tabs[i].gameObject.SetActive(show);
+            bool castable = show && _game.IsComplete(i);
+            _combatScreen.CastButtons[i].gameObject.SetActive(castable);
+            if (!show) continue;
+            Rect bounds = PatternBounds(i, cell);
+            Vector2[] candidates = { new Vector2(bounds.xMin, -bounds.yMin + TAB_HEIGHT), new Vector2(bounds.xMin, -bounds.yMax), new Vector2(bounds.xMin - cell, -bounds.yMin), new Vector2(bounds.xMax, -bounds.yMin) };
+            Vector2 position = candidates[0];
+            foreach (Vector2 candidate in candidates) if (IsTabPositionFree(i, candidate, cell)) { position = candidate; break; }
+            _combatScreen.Tabs[i].Bind(SPELL_NAMES[i], PatternColor(i), position, cell);
+            if (castable) _combatScreen.CastButtons[i].Bind(PatternColor(i), _pendingCast == i || (_castDragging && _castDragBoard == i), PatternCenter(i, cell));
+        }
+    }
+
+    /// <summary>회전된 도안의 실제 삼각 구역을 포함하는 격자 기준 픽셀 경계를 반환한다.</summary>
+    private Rect PatternBounds(int spell, float cell)
+    {
+        float left = float.PositiveInfinity, top = float.PositiveInfinity, right = float.NegativeInfinity, bottom = float.NegativeInfinity;
+        for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
+        {
+            int mask = _layout.PlacedMask(spell, x, y);
+            for (int sector = 0; sector < 4; sector++)
+            {
+                if ((mask & (1 << sector)) == 0) continue;
+                left = Mathf.Min(left, (x + (sector == 1 ? 0.5f : 0f)) * cell);
+                right = Mathf.Max(right, (x + (sector == 3 ? 0.5f : 1f)) * cell);
+                top = Mathf.Min(top, (y + (sector == 2 ? 0.5f : 0f)) * cell);
+                bottom = Mathf.Max(bottom, (y + (sector == 0 ? 0.5f : 1f)) * cell);
+            }
+        }
+        return Rect.MinMaxRect(left, top, right, bottom);
+    }
+
+    /// <summary>이름표 후보가 다른 도안과 이미 놓인 이름표에 겹치지 않는지 반환한다.</summary>
+    private bool IsTabPositionFree(int spell, Vector2 position, float cell)
+    {
+        Rect candidate = new Rect(position.x, -position.y, cell, TAB_HEIGHT);
+        foreach (int other in _game.Spells)
+        {
+            if (other == spell || !_layout.IsPlaced(other)) continue;
+            for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
+                if (_layout.PlacedMask(other, x, y) != 0 && candidate.Overlaps(new Rect(x * cell, y * cell, cell, cell))) return false;
+            if (other < spell && _combatScreen.Tabs[other].gameObject.activeSelf)
+            {
+                RectTransform tab = _combatScreen.Tabs[other].Rect;
+                if (candidate.Overlaps(new Rect(tab.anchoredPosition.x, -tab.anchoredPosition.y, tab.sizeDelta.x, tab.sizeDelta.y))) return false;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>지정 줄의 열 범위를 다른 배치 도안이 쓰는지 반환한다.</summary>
+    private bool RowUsedByOther(int spell, int row, int fromX, int toX)
+    {
+        for (int i = 0; i < _game.Spells.Count; i++)
+        {
+            int other = _game.Spells[i];
+            if (other == spell) continue;
+            for (int x = fromX; x < toX; x++) if (_layout.PlacedMask(other, x, row) != 0) return true;
+        }
+        return false;
+    }
+
+    /// <summary>도안이 차지한 구역 수로 가중한 칸 중심의 평균을 격자 기준 좌표(y 아래가 음수)로 반환한다.</summary>
+    private Vector2 PatternCenter(int spell, float cell)
+    {
+        Vector2 sum = Vector2.zero; int weight = 0;
+        for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
+        {
+            int count = BitCount(_layout.PlacedMask(spell, x, y));
+            sum += new Vector2(x + 0.5f, y + 0.5f) * count; weight += count;
+        }
+        Vector2 center = weight > 0 ? sum / weight : Vector2.zero;
+        return new Vector2(center.x * cell, -center.y * cell);
+    }
+
+    /// <summary>4비트 구역 마스크에서 켜진 구역 수를 반환한다.</summary>
+    private static int BitCount(int mask)
+    {
+        int count = 0;
+        for (int i = 0; i < 4; i++) if ((mask & (1 << i)) != 0) count++;
+        return count;
+    }
+
+    /// <summary>조준 중·선택 중·완성된 도안 순으로 하나를 골라 고정 미리보기에 계산식을 표시한다.</summary>
+    private void RefreshPreviewBar()
+    {
+        _combatScreen.Preview.gameObject.SetActive(false);
+    }
+
+    /// <summary>도안의 빈 구역을 1/4칸 단위 문구로 반환한다.</summary>
+    private string RemainingText(int spell)
+    {
+        int total = 0, filled = 0;
+        for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) total += BitCount(SpellGame.PatternMask(spell, x, y));
+        foreach (SpellGame.Placement piece in _game.Boards[spell].Pieces)
+            filled += piece.Card.Shape == SpellGame.Shape.QuarterTriangle ? 1 : piece.Card.Shape == SpellGame.Shape.Triangle ? 2 : piece.Card.Shape == SpellGame.Shape.Square ? 4 : 8;
+        int left = Math.Max(0, total - filled);
+        if (left % 4 == 0) return $"{left / 4}칸 남음";
+        return left < 4 ? $"{left}/4칸 남음" : $"{left / 4}칸 {left % 4}/4 남음";
+    }
+
+    /// <summary>도안의 기본 효과와 특수 조각 효과를 계산식과 부가 효과 문구로 만든다.</summary>
+    private string BuildFormula(int spell, bool complete, out string detail)
+    {
+        int flame = 0, guard = 0, resonance = 0, afterimage = 0;
+        foreach (SpellGame.Placement piece in _game.Boards[spell].Pieces)
+        {
+            if (piece.Card.Effect == SpellGame.Effect.Flame) flame++;
+            if (piece.Card.Effect == SpellGame.Effect.Guard) guard++;
+            if (piece.Card.Effect == SpellGame.Effect.Resonance && spell >= 2) resonance++;
+            if (piece.Card.Effect == SpellGame.Effect.Afterimage && !piece.HasPersisted) afterimage++;
+        }
+        List<string> notes = new List<string>();
+        if (resonance > 0) notes.Add($"공명 · 시전 후 조각 {resonance}장 뽑기");
+        if (afterimage > 0) notes.Add($"잔상 {afterimage}장 · 시전 후 판에 1회 남음");
+        if (!complete) notes.Add("빈 구역을 채우면 시전할 수 있습니다");
+        detail = string.Join("    ", notes);
+        if (spell == 1)
+        {
+            int defense = SPELL_BASE[1] + guard * 3;
+            return guard > 0 ? $"기본 방어 {SPELL_BASE[1]}  +  수호 {guard * 3}  =  방어 {defense}" : $"방어 {defense}";
+        }
+        string word = spell == 3 ? "전체 피해" : "피해";
+        int damage = _game.GetSpellDamage(spell);
+        return flame > 0 ? $"기본 {word} {SPELL_BASE[spell]}  +  불꽃 {flame * 2}  =  {word} {damage}" : $"{word} {damage}";
+    }
+
+    /// <summary>적 슬롯을 적 수에 맞춰 배치하고 상태·대상·조준 미리보기를 갱신한다.</summary>
+    private void RefreshEnemies()
+    {
+        SpellEnemyView[] views = _combatScreen.Enemies;
+        int count = Mathf.Clamp(_game.Enemies.Count, 1, views.Length);
+        bool aiming = _pendingCast >= 0 || _castDragging;
+        int castBoard = _pendingCast >= 0 ? _pendingCast : _castDragBoard;
+        for (int i = 0; i < views.Length; i++)
+        {
+            bool show = i < _game.Enemies.Count;
+            views[i].gameObject.SetActive(show);
+            if (!show) continue;
+            SpellGame.Enemy enemy = _game.Enemies[i];
+            ((RectTransform)views[i].transform).anchoredPosition = new Vector2(ENEMY_X[count - 1][i], -ENEMY_BOTTOM);
+            views[i].SetWidth(count >= 3 ? ENEMY_NARROW_BAR_WIDTH : ENEMY_BAR_WIDTH);
+            bool boss = enemy.MaxHealth >= 60, large = enemy.MaxHealth >= 26;
+            Vector2 size = boss ? BOSS_SIZE : large ? LARGE_ENEMY_SIZE : NORMAL_ENEMY_SIZE;
+            Color color = _enemyColors[boss ? 2 : large ? 1 : 0];
+            string pattern = enemy.Pattern.Count > 1 ? "패턴 " + string.Join(" · ", enemy.Pattern) + " 반복" : "";
+            int preview = aiming && i == _hoverEnemy && enemy.Health > 0 ? _game.GetSpellDamage(castBoard) : 0;
+            views[i].Bind(enemy.Name, enemy.Health, enemy.MaxHealth, enemy.Intent, pattern, color, size, boss, i == _game.Target, aiming, preview);
+        }
+    }
+
+    /// <summary>적 클릭으로 조준 중 주문을 시전하거나 다음 공격 대상을 고른다.</summary>
+    private void ClickEnemy(int index)
+    {
+        if (!CanInteract) return;
+        if (_pendingCast >= 0) CastSpell(_pendingCast, index);
+        else { _game.SelectTarget(index); Render(); }
+    }
+
+    /// <summary>손패 카드를 클릭해 선택한다.</summary>
+    private void SelectHandCard(SpellGame.Card card)
+    {
+        if (!CanInteract) return;
+        _pendingCast = -1; _selectedCard = card; _selectedPiece = null; _selectedBoard = -1; _rotation = 0;
+        Render();
+    }
+
+    /// <summary>도안 탭의 더보기 메뉴를 탭 오른쪽 아래에 연다.</summary>
+    private void OpenPatternMenu(int spell)
+    {
+        if (!CanInteract) return;
+        Vector3[] corners = new Vector3[4];
+        _combatScreen.Tabs[spell].Rect.GetWorldCorners(corners);
+        // 탭의 오른쪽 아래 모서리에 메뉴의 오른쪽 위를 맞춘다.
+        Vector2 bottomRight = ToLayer(RectTransformUtility.WorldToScreenPoint(null, corners[3]));
+        _combatScreen.MoreMenu.Open(new Vector2(bottomRight.x, bottomRight.y - MENU_GAP), () => AbandonPattern(spell));
+    }
+
+    /// <summary>도안을 비워 이번 턴 조각은 손패로, 이전 턴 조각은 묘지로 보낸다.</summary>
+    private void AbandonPattern(int spell)
+    {
+        if (!_game.Abandon(spell)) _message = "손패가 가득 차 비울 수 없습니다";
+        else { ClearSelection(); _message = ""; }
+        Render();
+    }
+
+    /// <summary>화면 좌표를 전투 화면 끌기 층의 왼쪽 위 기준 좌표(y 아래가 음수)로 바꾼다.</summary>
+    private Vector2 ToLayer(Vector2 screenPosition)
+    {
+        RectTransform layer = _combatScreen.DragLayer;
+        Vector2 local;
+        RectTransformUtility.ScreenPointToLocalPointInRectangle(layer, screenPosition, null, out local);
+        return new Vector2(local.x - layer.rect.xMin, local.y - layer.rect.yMax);
+    }
+
+    /// <summary>첫 주문까지 현재 가능한 조작을 강조하고 설명과 고스트를 준비한다. 기존 좌표를 쓰며 새 화면 연결은 다음 작업이다.</summary>
     private void RenderOnboarding()
     {
         List<Rect> holes = new List<Rect>(); string step; string message; SpellGame.Card ghostCard = null; int ghostRotation = 0; bool showContinue = false;
@@ -325,26 +626,27 @@ public sealed class SpellGameUI : MonoBehaviour
         {
             int target = 0;
             while (target < _game.Enemies.Count && _game.Enemies[target].Health <= 0) target++;
-            float x = (_game.Enemies.Count == 1 ? 522 : 390) + target * 250;
-            holes.Add(new Rect(x, 58, 235, 66)); start = end = new Vector2(x + 117, 91);
+            float x = 640 - _game.Enemies.Count * 125 + target * 250;
+            holes.Add(new Rect(x, 15, 235, 230)); start = end = new Vector2(x + 117, 125);
             step = "target"; message = "이 주문은 선택한 적 하나에게 효과를 적용합니다.\n공격할 적을 선택하세요.";
         }
         else if (!_onboardingPlacementExplained && _game.CraftCount > 0)
         {
-            holes.Add(new Rect(1080, 5, 165, 34)); start = end = Vector2.zero;
+            holes.Add(new Rect(30, 570, 190, 30)); start = end = Vector2.zero;
             step = "placements"; showContinue = true;
             message = "한 턴에 기본 3회 조각을 배치할 수 있습니다.\n시전하지 않은 조각은 다음 턴에도 도안에 남습니다.";
         }
         else if (complete >= 0)
         {
-            float y = 155 + complete * 53;
-            holes.Add(new Rect(1080, y, 95, 44)); start = end = new Vector2(1127, y + 22);
+            float x = _layout.Origin(complete).x < 3 ? 230 : 900;
+            float y = 280 + complete * 32;
+            holes.Add(new Rect(x, y, 150, 28)); start = end = new Vector2(x + 75, y + 14);
             step = "cast" + complete; message = "도안이 완성되어 주문이 준비됐습니다.\n시전 버튼을 눌러 주문을 사용하세요.";
         }
         else
         {
             int cardIndex = -1, board = -1, cellX = 0, cellY = 0, rotation = 0;
-            if (_game.PlacementsLeft > 0)
+            if (_game.Hand.Count > 0)
             {
                 for (int pass = 0; pass < 2 && cardIndex < 0; pass++)
                     for (int i = 0; i < _game.Hand.Count && cardIndex < 0; i++)
@@ -355,7 +657,7 @@ public sealed class SpellGameUI : MonoBehaviour
                         if (pass == 0 && candidate.Shape != preferred) continue;
                         foreach (int spell in _game.Spells)
                         {
-                            if (!_patternPlaced[spell]) continue;
+                            if (!_layout.IsPlaced(spell)) continue;
                             for (int y = 0; y < 3 && cardIndex < 0; y++) for (int x = 0; x < 3 && cardIndex < 0; x++) for (int r = 0; r < 4; r++)
                                 if (_game.CanPlace(spell, candidate, x, y, r)) { cardIndex = i; board = spell; cellX = x; cellY = y; rotation = r; break; }
                             if (cardIndex >= 0) break;
@@ -364,17 +666,17 @@ public sealed class SpellGameUI : MonoBehaviour
             }
             if (cardIndex < 0)
             {
-                holes.Add(new Rect(1080, 550, 160, 65)); start = end = new Vector2(1160, 582);
-                step = "turn"; message = "턴을 종료하면 적이 공격하고 새 턴에 조각과 배치 횟수를 받습니다.\n주문을 이어서 완성하세요.";
+                holes.Add(new Rect(1080, 635, 160, 65)); start = end = new Vector2(1160, 667);
+                step = "turn"; message = "턴을 종료하면 적이 공격하고 새 턴에 조각을 뽑습니다.\n주문을 이어서 완성하세요.";
             }
             else
             {
                 ghostCard = _game.Hand[cardIndex]; ghostRotation = rotation;
-                float cardX = 30 + cardIndex * 148;
-                Vector2Int origin = _patternPositions[board];
-                float gridX = 115 + (origin.x + cellX) * 72, gridY = 183 + (origin.y + cellY) * 72;
-                holes.Add(new Rect(cardX, 525, 144, 126)); holes.Add(new Rect(gridX, gridY, 72, 72));
-                start = new Vector2(cardX + 72, 588); end = new Vector2(gridX + 36, gridY + 36);
+                float cardX = 350 + (7 - _game.Hand.Count) * 25 + cardIndex * 85;
+                Vector2Int gridCell = _layout.LocalToGrid(board, new Vector2Int(cellX, cellY));
+                float gridX = 390 + gridCell.x * LEGACY_CELL, gridY = 280 + gridCell.y * LEGACY_CELL;
+                holes.Add(new Rect(cardX, 565, 81, 115)); holes.Add(new Rect(gridX, gridY, LEGACY_CELL, LEGACY_CELL));
+                start = new Vector2(cardX + 40, 622); end = new Vector2(gridX + 42, gridY + 42);
                 step = "place" + ghostCard.Id + ":" + board + ":" + cellX + ":" + cellY + ":" + rotation;
                 message = "도안에 조각을 채우면 주문을 시전할 수 있습니다.\n손패에서 조각을 선택해 도안의 빈칸으로 드래그하세요." + ((_selectedCard == ghostCard ? _rotation : 0) != rotation ? "\nR 또는 우클릭으로 회전해 빈 영역에 맞추세요." : "");
             }
@@ -471,7 +773,7 @@ public sealed class SpellGameUI : MonoBehaviour
         _pendingCast = -1; ClearSelection(); _game.EndTurn(); _message = "";
         int damage = healthBefore - _game.Health;
         _impactTarget = -1; _impactAll = false;
-        ShowFeedback($"적 공격  ·  방어 {absorbed}  ·  체력 -{damage}", new Color(0.91f, 0.48f, 0.40f));
+        ShowFeedback($"적 공격  ·  방어 {absorbed}  ·  체력 -{damage}", _dangerColor);
         Render();
     }
 
@@ -480,7 +782,13 @@ public sealed class SpellGameUI : MonoBehaviour
     {
         if (!_game.IsComplete(board)) { _message = "도안을 먼저 완성하세요"; Render(); return; }
         ClearSelection();
-        if (board == 0 || board == 2) { _pendingCast = board; _message = $"{SPELL_NAMES[board]}의 대상을 선택하세요 · Esc 메뉴"; Render(); }
+        if (board == 0 || board == 2)
+        {
+            int count = 0, onlyTarget = -1;
+            for (int i = 0; i < _game.Enemies.Count; i++) if (_game.Enemies[i].Health > 0) { count++; onlyTarget = i; }
+            if (count == 1) CastSpell(board, onlyTarget);
+            else { _pendingCast = board; Render(); _hintText = "적을 클릭해 시전 · 우클릭·Esc 취소"; }
+        }
         else CastSpell(board, _game.Target);
     }
 
@@ -494,31 +802,129 @@ public sealed class SpellGameUI : MonoBehaviour
         _message = ""; ShowFeedback(result, PatternColor(board)); Render();
     }
 
-    /// <summary>하나의 격자에 보유 도안과 각 도안의 포기 버튼을 표시한다.</summary>
-    private void RenderSharedBoard()
+    /// <summary>완성된 도안 버튼 클릭으로 해당 주문의 시전을 시작한다.</summary>
+    public void ClickCast(int board)
     {
-        RectTransform panel = Panel(_root, 55, 135, 1170, 340, new Color(0.19f, 0.24f, 0.30f));
-        Label(panel, "주문서  /  완성 후 시전 버튼을 누르세요", 60, 10, 432, 28, 16, TextAnchor.MiddleLeft);
-        EnsurePatterns();
-        for (int i = 0; i < 4; i++)
+        if (CanInteract) BeginCast(board);
+    }
+
+    /// <summary>손패의 조각 설명을 마우스 위치 근처에 표시하거나 지운다.</summary>
+    public void ShowPieceTooltip(SpellGame.Card card, Vector2 screenPosition)
+    {
+        ShowTextTooltip(card == null ? null : CardName(card), screenPosition);
+    }
+
+    /// <summary>포인터가 가리킨 도안의 주문 효과와 완성 상태를 표시한다.</summary>
+    public void ShowPatternTooltip(int spell, Vector2 screenPosition, SpellGame.Card card = null)
+    {
+        if (spell < 0) { ShowTextTooltip(null, screenPosition); return; }
+        bool complete = _game.IsComplete(spell);
+        string detail;
+        string formula = BuildFormula(spell, complete, out detail);
+        ShowTextTooltip($"{SPELL_NAMES[spell]} · {(complete ? "완성" : RemainingText(spell))}\n{formula}" + (string.IsNullOrEmpty(detail) ? "" : "\n" + detail) + (card == null ? "" : "\n" + CardName(card)), screenPosition);
+    }
+
+    /// <summary>지정한 설명을 화면 좌표 근처에 표시하거나 지운다. 드래그·조준 중에는 표시하지 않는다.</summary>
+    public void ShowTextTooltip(string message, Vector2 screenPosition)
+    {
+        if (message == null || !CanInteract || _dragGhost != null || _pendingCast >= 0 || _castDragging || _boardGraphic.IsDraggingPattern) { _combatScreen.Tooltip.Hide(); return; }
+        _combatScreen.Tooltip.Show(message, screenPosition);
+    }
+
+    /// <summary>단일 대상 주문을 놓은 화면 좌표의 살아 있는 적에게 시전한다.</summary>
+    public void DropCast(int board, PointerEventData eventData)
+    {
+        HideAim();
+        bool wasDragging = _castDragging;
+        _castDragging = false; _hoverEnemy = -1;
+        if (!CanInteract || (board != 0 && board != 2) || !wasDragging) return;
+        int target = EnemyAt(eventData.position, eventData.pressEventCamera);
+        if (target >= 0) { CastSpell(board, target); return; }
+        _pendingCast = -1;
+        _message = "살아 있는 적 위에 놓아 주세요";
+        Render();
+    }
+
+    /// <summary>화면 좌표 아래의 살아 있는 적 번호를 반환한다. 없으면 -1이다.</summary>
+    private int EnemyAt(Vector2 screenPosition, Camera eventCamera)
+    {
+        for (int i = 0; i < _game.Enemies.Count && i < _combatScreen.Enemies.Length; i++)
+            if (_game.Enemies[i].Health > 0 && _combatScreen.Enemies[i].Contains(screenPosition, eventCamera)) return i;
+        return -1;
+    }
+
+    /// <summary>단일 대상 주문 드래그의 조준 상태를 시작한다.</summary>
+    public void BeginCastDrag(int board)
+    {
+        if (!CanInteract || (board != 0 && board != 2)) return;
+        _combatScreen.Tooltip.Hide();
+        ClearSelection();
+        _castDragging = true; _castDragBoard = board; _hoverEnemy = -1;
+        _hintText = "살아 있는 적에게 놓아 시전하세요";
+        RefreshPatternControls(); RefreshPreviewBar(); RefreshEnemies();
+    }
+
+    /// <summary>시전 드래그 중 조준선을 그리고 포인터 아래 적의 예상 피해를 갱신한다.</summary>
+    public void PreviewCast(int board, PointerEventData eventData)
+    {
+        if (!CanInteract || (board != 0 && board != 2)) return;
+        DrawAim(board, eventData.position);
+        UpdateHoverEnemy(board, EnemyAt(eventData.position, eventData.pressEventCamera));
+    }
+
+    /// <summary>시전 버튼 중심에서 포인터까지 직선 조준선을 그린다.</summary>
+    private void DrawAim(int board, Vector2 pointer)
+    {
+        Vector3[] corners = new Vector3[4];
+        _combatScreen.CastButtons[board].Rect.GetWorldCorners(corners);
+        Vector2 start = ToLayer(RectTransformUtility.WorldToScreenPoint(null, (corners[0] + corners[2]) / 2));
+        Vector2 end = ToLayer(pointer);
+        SetSegment(_combatScreen.AimLine, start, end);
+        if (_aimElbow != null) _aimElbow.gameObject.SetActive(false);
+    }
+
+    /// <summary>선분 이미지를 두 점 사이에 놓는다. 좌표는 끌기 층의 왼쪽 위 기준이다.</summary>
+    private static void SetSegment(RectTransform line, Vector2 from, Vector2 to)
+    {
+        Vector2 difference = to - from;
+        line.gameObject.SetActive(difference.sqrMagnitude > 1f);
+        line.anchoredPosition = from;
+        line.sizeDelta = new Vector2(difference.magnitude, line.sizeDelta.y);
+        line.localRotation = Quaternion.Euler(0, 0, Mathf.Atan2(difference.y, difference.x) * Mathf.Rad2Deg);
+    }
+
+    /// <summary>조준선을 숨긴다.</summary>
+    private void HideAim()
+    {
+        _combatScreen.AimLine.gameObject.SetActive(false);
+        if (_aimElbow != null) _aimElbow.gameObject.SetActive(false);
+    }
+
+    /// <summary>가리킨 적이 바뀌면 예상 피해 표시와 안내 문구를 갱신한다.</summary>
+    private void UpdateHoverEnemy(int board, int target)
+    {
+        if (target >= 0)
         {
-            if (!_game.Spells.Contains(i)) continue;
-            int index = i;
-            RectTransform handle = Panel(panel, 550, 20 + i * 53, 370, 44, new Color(0.25f, 0.32f, 0.39f));
-            handle.gameObject.AddComponent<SpellPatternDrag>().Setup(this, index);
-            RectTransform marker = Panel(handle, 4, 6, 6, 32, PatternColor(i));
-            marker.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
-            Label(handle, $"↕ {SPELL_NAMES[i]}: {Preview(_game.Boards[i])}{(_game.IsComplete(i) ? " · 완성" : _patternPlaced[i] ? "" : " · 배치 필요")}", 16, 0, 344, 44, 15, TextAnchor.MiddleLeft);
-            Button(panel, "포기", 930, 20 + i * 53, 85, 44, () => { if (!_game.Abandon(index)) _message = "손패가 가득 차 포기할 수 없습니다"; else { ClearSelection(); _message = ""; } Render(); }, null, 14);
-            Button(panel, _game.IsComplete(i) ? "시전" : "미완성", 1025, 20 + i * 53, 95, 44, () => BeginCast(index), _game.IsComplete(i) ? PatternColor(i) * 0.65f : new Color(0.2f, 0.24f, 0.28f), 14);
+            SpellGame.Enemy enemy = _game.Enemies[target];
+            int damage = _game.GetSpellDamage(board);
+            _hintText = $"{enemy.Name} · 피해 {damage} · 체력 {enemy.Health} → {Math.Max(0, enemy.Health - damage)}";
         }
-        RectTransform grid = Element("Grid", panel, 60, 48, 432, 216);
-        grid.gameObject.AddComponent<CanvasRenderer>();
-        SpellBoardGraphic graphic = grid.gameObject.AddComponent<SpellBoardGraphic>();
-        graphic.Setup(this, _game);
-        _boardGraphic = graphic;
-        Label(panel, "조각을 드래그해 이동 · 손패로 드래그해 회수", 550, 234, 520, 30, 15, TextAnchor.MiddleLeft);
-        Button(panel, "선택 조각 회수", 550, 275, 180, 40, () => { if (_selectedPiece == null || !_game.Recall(_selectedBoard, _selectedPiece)) _message = "회수할 조각을 선택하세요 (손패 최대 7장)"; else { ClearSelection(); _message = ""; } Render(); }, null, 16);
+        else _hintText = _castDragging ? "살아 있는 적에게 놓아 시전하세요" : "적을 클릭해 시전 · 우클릭·Esc 취소";
+        if (target == _hoverEnemy) return;
+        _hoverEnemy = target;
+        RefreshEnemies();
+    }
+
+    /// <summary>클릭 시전의 대상 선택 중 가리킨 적의 예상 피해를 표시한다.</summary>
+    public void PreviewPendingCast(PointerEventData eventData)
+    {
+        if (_pendingCast >= 0) UpdateHoverEnemy(_pendingCast, EnemyAt(eventData.position, eventData.enterEventCamera));
+    }
+
+    /// <summary>대상 포인터가 벗어나면 예상 피해 표시를 지운다.</summary>
+    public void ClearPendingPreview()
+    {
+        if (_pendingCast >= 0 && !_castDragging) UpdateHoverEnemy(_pendingCast, -1);
     }
 
     /// <summary>새 게임에서 도안 배치를 기본 위치로 되돌린다.</summary>
@@ -528,74 +934,52 @@ public sealed class SpellGameUI : MonoBehaviour
         _showHelp = false;
         _showPauseMenu = false;
         _onboardingComplete = false;
-        _onboardingPlacementExplained = false;
+        _onboardingPlacementExplained = true;
         _onboardingStep = ""; _onboardingActivity = Time.unscaledTime;
         _pendingCast = -1;
-        _patternPositions[0] = new Vector2Int(0, 0); _patternPositions[1] = new Vector2Int(1, 0);
-        _patternPositions[2] = new Vector2Int(2, 0); _patternPositions[3] = new Vector2Int(4, 0);
-        for (int i = 0; i < 4; i++) _patternPlaced[i] = false;
+        _layout.Reset();
     }
 
     /// <summary>새로 얻은 도안을 빈 공간에 놓고 공간이 없으면 미배치 상태로 둔다.</summary>
     private void EnsurePatterns()
     {
-        foreach (int spell in _game.Spells)
-        {
-            if (_patternPlaced[spell]) continue;
-            Vector2Int preferred = _patternPositions[spell];
-            if (CanMovePattern(spell, preferred)) { _patternPlaced[spell] = true; continue; }
-            for (int y = 0; y < 3 && !_patternPlaced[spell]; y++)
-                for (int x = 0; x < 6 && !_patternPlaced[spell]; x++)
-                    if (CanMovePattern(spell, new Vector2Int(x, y))) { _patternPositions[spell] = new Vector2Int(x, y); _patternPlaced[spell] = true; }
-        }
+        _layout.EnsurePlaced(_game.Spells);
     }
 
-    /// <summary>도안의 칸들이 격자 안에 있고 다른 도안과 겹치지 않는지 반환한다.</summary>
-    public bool CanMovePattern(int spell, Vector2Int origin)
+    /// <summary>도안을 새 위치·회전으로 옮기고 결과를 화면에 반영한다. 불가하면 원래 위치·방향을 유지하고 이유를 표시한다.</summary>
+    public void MovePattern(int spell, Vector2Int origin, int rotation)
     {
-        foreach (Vector2Int cell in PATTERN_CELLS[spell])
-        {
-            Vector2Int pos = origin + cell;
-            if (pos.x < 0 || pos.x >= 6 || pos.y < 0 || pos.y >= 3) return false;
-            foreach (int other in _game.Spells)
-            {
-                if (other == spell || !_patternPlaced[other]) continue;
-                foreach (Vector2Int occupied in PATTERN_CELLS[other]) if (_patternPositions[other] + occupied == pos) return false;
-            }
-        }
-        return true;
-    }
-
-    /// <summary>도안을 새 위치로 옮기고 결과를 화면에 반영한다.</summary>
-    public void MovePattern(int spell, Vector2Int origin)
-    {
-        if (CanMovePattern(spell, origin)) { _patternPositions[spell] = origin; _patternPlaced[spell] = true; _message = ""; }
-        else _message = "도안이 겹치거나 격자 밖입니다";
+        if (!CanMovePattern(spell)) { _message = "고정된 조각이 있는 도안은 이동할 수 없습니다"; Render(); return; }
+        string issue = _layout.MoveIssue(spell, origin, rotation, _game.Spells);
+        if (issue == null) { _layout.Place(spell, origin, rotation); _message = ""; }
+        else _message = issue + " · 원래 자리로 돌아갑니다";
         Render();
     }
 
-    /// <summary>격자 좌표에 있는 보유 도안과 도안 내부 좌표를 반환한다.</summary>
-    public bool MapCell(int x, int y, out int spell, out int localX, out int localY)
+    /// <summary>도안에 고정된 이전 턴 조각이나 잔상이 없는지 확인한다.</summary>
+    public bool CanMovePattern(int spell)
     {
-        foreach (int index in _game.Spells)
-        {
-            if (!_patternPlaced[index]) continue;
-            foreach (Vector2Int cell in PATTERN_CELLS[index])
-                if (_patternPositions[index] + cell == new Vector2Int(x, y)) { spell = index; localX = cell.x; localY = cell.y; return true; }
-        }
-        spell = localX = localY = -1; return false;
+        foreach (SpellGame.Placement piece in _game.Boards[spell].Pieces) if (!_game.CanMovePiece(piece)) return false;
+        return true;
     }
-
-    /// <summary>도안의 현재 격자상 원점을 반환한다.</summary>
-    public Vector2Int PatternPosition(int spell) { return _patternPositions[spell]; }
-
-    /// <summary>도안을 구성하는 로컬 칸 좌표를 반환한다.</summary>
-    public IReadOnlyList<Vector2Int> PatternCells(int spell) { return PATTERN_CELLS[spell]; }
 
     /// <summary>도안별 외곽선을 구분할 색을 반환한다.</summary>
     public Color PatternColor(int spell)
     {
-        return PATTERN_COLORS[spell];
+        return _patternColors[spell];
+    }
+
+    /// <summary>특수 효과의 표시 색을 반환한다. 일반 조각은 글자색을 반환한다.</summary>
+    private Color EffectColor(SpellGame.Effect effect)
+    {
+        switch (effect)
+        {
+            case SpellGame.Effect.Flame: return _flameColor;
+            case SpellGame.Effect.Guard: return _guardColor;
+            case SpellGame.Effect.Resonance: return _resonanceColor;
+            case SpellGame.Effect.Afterimage: return _afterimageColor;
+            default: return _textColor;
+        }
     }
 
     /// <summary>판의 기본 효과와 현재 특수 조각의 효과 합을 반환한다.</summary>
@@ -610,26 +994,51 @@ public sealed class SpellGameUI : MonoBehaviour
             if (additional.Effect == SpellGame.Effect.Resonance && board.Spell >= 2) extraPlacements++;
             if (additional.Effect == SpellGame.Effect.Afterimage && !additional.HasPersisted) afterimages++;
         }
-        return SPELL_EFFECTS[board.Spell] + (flame > 0 && board.Spell != 1 ? $" +{flame} 피해" : "") + (guard > 0 ? $" +{guard} 방어" : "") + (extraPlacements > 0 ? $" · 배치 +{extraPlacements}" : "") + (afterimages > 0 ? $" · 잔상 {afterimages}장 유지" : "");
+        return SPELL_EFFECTS[board.Spell] + (flame > 0 && board.Spell != 1 ? $" +{flame} 피해" : "") + (guard > 0 ? $" +{guard} 방어" : "") + (extraPlacements > 0 ? $" · 조각 {extraPlacements}장 뽑기" : "") + (afterimages > 0 ? $" · 잔상 {afterimages}장 유지" : "");
+    }
+
+    /// <summary>도형 이름을 반환한다.</summary>
+    private static string ShapeName(SpellGame.Shape shape)
+    {
+        return shape == SpellGame.Shape.Square ? "정사각형" : shape == SpellGame.Shape.Triangle ? "반칸 삼각형" : shape == SpellGame.Shape.QuarterTriangle ? "1/4 삼각형" : "직사각형";
     }
 
     /// <summary>카드의 도형과 특수 효과를 표시하는 이름을 반환한다.</summary>
     private string CardName(SpellGame.Card card)
     {
-        string shape = card.Shape == SpellGame.Shape.Square ? "정사각형" : card.Shape == SpellGame.Shape.Triangle ? "반칸 삼각형" : card.Shape == SpellGame.Shape.QuarterTriangle ? "1/4 삼각형" : "직사각형";
-        string effect = card.Effect == SpellGame.Effect.Flame ? "불꽃 · 공격 피해 +2" : card.Effect == SpellGame.Effect.Guard ? "수호 · 방어 +3" : card.Effect == SpellGame.Effect.Resonance ? "공명 · 3칸 이상 배치 +1" : card.Effect == SpellGame.Effect.Afterimage ? card.HasPersisted ? "잔상 · 다음 시전 후 버림" : "잔상 · 시전 후 1회 유지" : "일반 · 추가 효과 없음";
-        return shape + "\n" + effect;
+        string effect = card.Effect == SpellGame.Effect.Flame ? "불꽃 · 공격 피해 +2" : card.Effect == SpellGame.Effect.Guard ? "수호 · 방어 +3" : card.Effect == SpellGame.Effect.Resonance ? "공명 · 3칸 이상 조각 1장 뽑기" : card.Effect == SpellGame.Effect.Afterimage ? card.HasPersisted ? "잔상 · 다음 시전 후 버림" : "잔상 · 시전 후 1회 유지" : "일반 · 추가 효과 없음";
+        return ShapeName(card.Shape) + "\n" + effect;
     }
 
-    /// <summary>카드 효과와 선택 여부를 나타내는 색을 반환한다.</summary>
-    private Color CardColor(SpellGame.Card card, bool selected)
+    /// <summary>손패 카드에 쓸 짧은 이름을 반환한다. 특수 조각은 효과 이름을 앞에 붙인다.</summary>
+    private static string DisplayName(SpellGame.Card card)
     {
-        if (selected) return new Color(0.65f, 0.57f, 0.3f);
-        return card.Effect == SpellGame.Effect.Flame ? new Color(0.65f, 0.31f, 0.16f) : card.Effect == SpellGame.Effect.Guard ? new Color(0.18f, 0.37f, 0.56f) : card.Effect == SpellGame.Effect.Resonance ? new Color(0.42f, 0.28f, 0.54f) : card.Effect == SpellGame.Effect.Afterimage ? new Color(0.18f, 0.48f, 0.46f) : new Color(0.39f, 0.43f, 0.47f);
+        string shape = card.Shape == SpellGame.Shape.Triangle && card.Effect != SpellGame.Effect.None ? "삼각형" : ShapeName(card.Shape);
+        switch (card.Effect)
+        {
+            case SpellGame.Effect.Flame: return "불꽃 " + shape;
+            case SpellGame.Effect.Guard: return "수호 " + shape;
+            case SpellGame.Effect.Resonance: return "공명 " + shape;
+            case SpellGame.Effect.Afterimage: return "잔상 " + shape;
+            default: return shape;
+        }
     }
 
-    /// <summary>미보유 도안이 있으면 혼합 후보 세 개, 없으면 특수 카드 네 종류를 표시한다.</summary>
-    private void RenderRewards()
+    /// <summary>손패 카드 아래 칩에 쓸 특수 효과 문구를 반환한다.</summary>
+    private static string EffectText(SpellGame.Card card)
+    {
+        switch (card.Effect)
+        {
+            case SpellGame.Effect.Flame: return "공격 피해 +2";
+            case SpellGame.Effect.Guard: return "방어 +3";
+            case SpellGame.Effect.Resonance: return "3칸 이상 조각 1장 뽑기";
+            case SpellGame.Effect.Afterimage: return card.HasPersisted ? "다음 시전 후 버림" : "시전 후 1회 유지";
+            default: return "";
+        }
+    }
+
+    /// <summary>미보유 도안이 있으면 혼합 후보 세 개, 없으면 특수 카드 네 종류를 보상 화면에 표시한다. 후보는 보상 단계에 처음 들어올 때만 뽑는다.</summary>
+    private void RefreshRewards()
     {
         if (_renderedPhase != SpellGame.Phase.Reward)
         {
@@ -643,211 +1052,196 @@ public sealed class SpellGameUI : MonoBehaviour
             }
             for (int i = _rewards.Count - 1; i > 0; i--) { int j = _random.Next(i + 1); int t = _rewards[i]; _rewards[i] = _rewards[j]; _rewards[j] = t; }
         }
-        Label(_root, "전투 승리 · 체력 최대 6 회복", 300, 110, 680, 60, 30);
-        Label(_root, "보상 하나를 선택하세요", 300, 180, 680, 45, 22);
-        float startX = (1280 - (_rewards.Count * 285 + (_rewards.Count - 1) * 20)) / 2f;
-        for (int i = 0; i < _rewards.Count; i++) RenderRewardCard(_rewards[i], startX + 305 * i);
-        Button(_root, "건너뛰기", 530, 490, 220, 55, () => { _game.ChooseReward(-1); ClearSelection(); Render(); });
-    }
-
-    /// <summary>보상 종류와 실제 도형 또는 도안을 함께 표시하고 선택 동작을 연결한다.</summary>
-    private void RenderRewardCard(int reward, float x)
-    {
-        bool isSpell = reward >= 4;
-        Color accent = isSpell ? PatternColor(reward - 2) : reward == 0 ? new Color(0.90f, 0.48f, 0.24f) : reward == 1 ? new Color(0.34f, 0.67f, 0.88f) : reward == 2 ? new Color(0.70f, 0.52f, 0.85f) : new Color(0.35f, 0.76f, 0.68f);
-        RectTransform card = Panel(_root, x, 250, 285, 195, new Color(0.24f, 0.31f, 0.38f));
-        UnityEngine.UI.Button button = card.gameObject.AddComponent<UnityEngine.UI.Button>();
-        button.onClick.AddListener(() => { if (_game.ChooseReward(reward)) { ClearSelection(); _message = ""; Render(); } });
-        RectTransform stripe = Panel(card, 0, 0, 285, 5, accent);
-        stripe.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
-        Label(card, isSpell ? "새 도안" : "특수 조각", 8, 7, 269, 27, 15);
-        if (isSpell)
+        SpellRewardCardView[] cards = _rewardScreen.Cards;
+        _rewardScreen.ShowCards(Mathf.Min(_rewards.Count, cards.Length));
+        for (int i = 0; i < _rewards.Count && i < cards.Length; i++)
         {
-            foreach (Vector2Int cell in PATTERN_CELLS[reward - 2])
+            int reward = _rewards[i];
+            if (reward >= 4) cards[i].BindPattern(reward, REWARD_NAMES[reward], PATTERN_CELLS[reward - 2], PatternColor(reward - 2), ChooseReward);
+            else
             {
-                RectTransform tile = Panel(card, 111 + cell.x * 32, 40 + cell.y * 32, 28, 28, accent);
-                tile.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
+                SpellGame.Effect effect = reward == 0 ? SpellGame.Effect.Flame : reward == 1 ? SpellGame.Effect.Guard : reward == 2 ? SpellGame.Effect.Resonance : SpellGame.Effect.Afterimage;
+                SpellGame.Shape shape = reward == 0 ? SpellGame.Shape.Triangle : reward == 1 ? SpellGame.Shape.Square : reward == 2 ? SpellGame.Shape.Rectangle : SpellGame.Shape.QuarterTriangle;
+                cards[i].BindPiece(reward, REWARD_NAMES[reward], shape, EffectColor(effect), ChooseReward);
             }
         }
-        else
-        {
-            SpellGame.Shape shape = reward == 0 ? SpellGame.Shape.Triangle : reward == 1 ? SpellGame.Shape.Square : reward == 2 ? SpellGame.Shape.Rectangle : SpellGame.Shape.QuarterTriangle;
-            float width = shape == SpellGame.Shape.Rectangle ? 112 : 56;
-            RectTransform iconRect = Element("Reward Shape", card, (285 - width) / 2, 40, width, 56);
-            iconRect.gameObject.AddComponent<CanvasRenderer>();
-            SpellShapeGraphic icon = iconRect.gameObject.AddComponent<SpellShapeGraphic>();
-            icon.raycastTarget = false; icon.Shape = shape; icon.color = accent;
-        }
-        Label(card, REWARD_NAMES[reward], 8, 110, 269, 70, 20);
     }
 
     /// <summary>배치한 조각을 이동 또는 회수 대상으로 선택한다.</summary>
     public void SelectPiece(int board, SpellGame.Placement piece)
     {
-        _pendingCast = -1; _selectedPiece = piece; _selectedCard = piece.Card; _selectedBoard = board; _rotation = piece.Rotation; _message = "판을 클릭해 이동하거나 손패로 드래그하세요";
+        if (!_game.CanMovePiece(piece)) { _message = "이전 턴 조각과 시전 후 남은 잔상은 이동할 수 없습니다"; Render(); return; }
+        _pendingCast = -1; _selectedPiece = piece; _selectedCard = piece.Card; _selectedBoard = board; _message = "판을 클릭해 이동하거나 손패로 드래그하세요";
+        Vector2Int anchor;
+        _layout.PieceToGrid(board, piece, out anchor, out _rotation);
         Render();
     }
-    /// <summary>격자 위치에 선택한 카드를 놓거나 기존 조각을 이동한다.</summary>
-    public void ClickGrid(int board, int x, int y)
+
+    /// <summary>격자 앵커 칸과 현재 화면 회전(_rotation)을 지정 도안의 기준 칸·회전으로 바꾼다.</summary>
+    private void ToLocalPlacement(int board, Vector2Int anchor, out int x, out int y, out int rotation)
+    {
+        Vector2Int local;
+        _layout.GridToLocalPlacement(board, _selectedCard.Shape, anchor, _rotation, out local, out rotation);
+        x = local.x; y = local.y;
+    }
+
+    /// <summary>격자 앵커 칸에 선택한 카드를 놓거나 기존 조각을 이동한다.</summary>
+    public void ClickGrid(int board, Vector2Int anchor)
     {
         if (_selectedCard == null) { _message = "먼저 손패 또는 배치된 조각을 선택하세요"; Render(); return; }
+        int x, y, rotation;
+        ToLocalPlacement(board, anchor, out x, out y, out rotation);
         SpellGame.Placement ignored = _selectedBoard == board ? _selectedPiece : null;
-        bool completes = CanPreview(board, x, y) && _game.WouldComplete(board, _selectedCard, x, y, _rotation, ignored);
-        bool success = _selectedPiece == null ? _game.Place(board, _selectedCard, x, y, _rotation) : _game.Move(_selectedBoard, _selectedPiece, board, x, y, _rotation);
-        if (success) { ClearSelection(); _message = completes ? $"{SPELL_NAMES[board]} 완성 · 시전 버튼을 누르세요" : ""; } else _message = PlacementIssue(board, x, y) ?? "이 위치에는 놓을 수 없습니다";
+        bool completes = CanPreviewGrid(board, anchor) && _game.WouldComplete(board, _selectedCard, x, y, rotation, ignored);
+        bool success = _selectedPiece == null ? _game.Place(board, _selectedCard, x, y, rotation) : _game.Move(_selectedBoard, _selectedPiece, board, x, y, rotation);
+        if (success) { ClearSelection(); _message = completes ? $"{SPELL_NAMES[board]} 완성 · 시전 버튼을 누르세요" : ""; } else _message = PlacementIssue(board, anchor) ?? "이 위치에는 놓을 수 없습니다";
         Render();
     }
 
-    /// <summary>선택 카드의 위치와 회전이 유효한지 반환한다.</summary>
-    public bool CanPreview(int board, int x, int y)
+    /// <summary>선택 카드를 격자 앵커 칸에 현재 화면 회전으로 놓을 수 있는지 반환한다.</summary>
+    public bool CanPreviewGrid(int board, Vector2Int anchor)
     {
-        return _selectedCard != null && (_selectedPiece != null || _game.PlacementsLeft > 0) && _game.CanPlace(board, _selectedCard, x, y, _rotation, _selectedBoard == board ? _selectedPiece : null);
+        if (_selectedCard == null) return false;
+        int x, y, rotation;
+        ToLocalPlacement(board, anchor, out x, out y, out rotation);
+        return _game.CanPlace(board, _selectedCard, x, y, rotation, _selectedBoard == board ? _selectedPiece : null);
     }
 
-    /// <summary>현재 선택 조각의 배치 실패 이유를 반환한다.</summary>
-    private string PlacementIssue(int board, int x, int y)
+    /// <summary>현재 선택 조각을 격자 앵커 칸에 놓을 수 없는 이유를 반환한다.</summary>
+    private string PlacementIssue(int board, Vector2Int anchor)
     {
         if (_selectedCard == null) return "먼저 조각을 선택하세요";
-        if (_selectedPiece == null && _game.PlacementsLeft <= 0) return "이번 턴의 배치 횟수를 모두 사용했습니다";
-        return _game.PlacementIssue(board, _selectedCard, x, y, _rotation, _selectedBoard == board ? _selectedPiece : null);
+        int x, y, rotation;
+        ToLocalPlacement(board, anchor, out x, out y, out rotation);
+        return _game.PlacementIssue(board, _selectedCard, x, y, rotation, _selectedBoard == board ? _selectedPiece : null);
     }
 
-    /// <summary>포인터 위치의 배치 가능 상태와 도안 완성 여부를 안내한다.</summary>
-    public void SetPreviewHint(int board, int x, int y)
+    /// <summary>포인터가 가리킨 격자 앵커 칸의 배치 가능 상태와 도안 완성 여부를 커서 안내로 쓴다. board가 음수면 기본 안내를 쓴다.</summary>
+    public void SetPreviewHint(int board, Vector2Int anchor)
     {
-        if (_previewHint == null) return;
-        string hint = "손패 선택 → 판 클릭 배치   ·   R / 우클릭 회전   ·   Esc 메뉴";
+        string hint = "R · 우클릭 회전   손패에 놓으면 취소";
         if (board >= 0 && _selectedCard != null)
         {
-            bool valid = CanPreview(board, x, y);
-            bool complete = valid && _game.WouldComplete(board, _selectedCard, x, y, _rotation, _selectedBoard == board ? _selectedPiece : null);
+            int x, y, rotation;
+            ToLocalPlacement(board, anchor, out x, out y, out rotation);
+            bool valid = CanPreviewGrid(board, anchor);
+            bool complete = valid && _game.WouldComplete(board, _selectedCard, x, y, rotation, _selectedBoard == board ? _selectedPiece : null);
             SpellGame.Card additional = _selectedBoard == board && _selectedPiece != null ? null : _selectedCard;
-            hint = complete ? $"놓으면 도안 완성  ·  {Preview(_game.Boards[board], additional)}" : valid ? $"배치 가능  ·  예상 {Preview(_game.Boards[board], additional)}" : PlacementIssue(board, x, y);
+            hint = complete ? $"놓으면 도안 완성  ·  {Preview(_game.Boards[board], additional)}" : valid ? $"배치 가능  ·  예상 {Preview(_game.Boards[board], additional)}" : PlacementIssue(board, anchor);
         }
-        _previewHint.text = hint;
+        _hintText = hint;
     }
 
-    /// <summary>선택한 조각이 도안 바깥에 놓일 수 없음을 안내한다.</summary>
+    /// <summary>도안을 들고 있을 때 놓을 수 있는지와 불가 이유를 커서 안내로 쓴다.</summary>
+    public void SetPatternHint(string issue)
+    {
+        _hintText = issue == null ? "놓을 수 있습니다 · R / 우클릭 회전" : issue;
+    }
+
+    /// <summary>선택한 조각이 도안 바깥에 놓일 수 없음을 커서 안내로 쓴다.</summary>
     public void SetOutsidePreviewHint()
     {
-        if (_previewHint != null && _selectedCard != null) _previewHint.text = "도안의 색 테두리 안에 놓아 주세요";
+        if (_selectedCard != null) _hintText = "도안의 색 테두리 안에 놓아 주세요";
     }
 
-    /// <summary>현재 게임을 중단하지 않고 핵심 조작과 조각 규칙을 설명한다.</summary>
-    private void RenderHelp()
-    {
-        Panel(_root, 0, 0, 1280, 720, new Color(0.04f, 0.06f, 0.09f, 0.84f));
-        RectTransform panel = Panel(_root, 260, 105, 760, 510, new Color(0.18f, 0.24f, 0.30f));
-        Label(panel, "주문서 사용법", 25, 20, 710, 48, 29);
-        Label(panel,
-            "1  손패의 도형을 도안 안으로 드래그하세요.\n" +
-            "2  삼각형은 R 또는 우클릭으로 회전합니다.\n" +
-            "    반칸 둘 또는 1/4 조각 넷이 한 칸을 채웁니다.\n" +
-            "3  완성된 도안의 시전을 누르고, 공격 대상이 필요하면 적을 선택하세요.\n" +
-            "4  배치된 조각을 드래그해 옮기거나 손패로 되돌리세요.\n" +
-            "    이번 턴 조각을 회수하면 배치 횟수도 돌아옵니다.\n" +
-            "5  턴 종료 시 손패를 버리고 적이 공격합니다.\n" +
-            "    미완성 도안은 유지되며 방어는 적 행동 후 사라집니다.",
-            55, 85, 650, 290, 19, TextAnchor.UpperLeft);
-        Label(panel, "공명: 3칸 이상 주문에서 배치 +1\n잔상: 첫 시전 뒤 남고, 다음 시전 뒤 사라집니다.", 55, 385, 650, 48, 16);
-        Button(panel, "닫기", 275, 435, 210, 50, () => { _showHelp = false; Render(); });
-    }
-
-    /// <summary>손패 카드 드래그를 시작하고 포인터를 따라갈 도형을 만든다.</summary>
+    /// <summary>손패 카드 드래그를 시작하고 포인터를 따라갈 도형을 표시한다.</summary>
     public void BeginCardDrag(SpellGame.Card card, Vector2 position)
     {
+        ShowPieceTooltip(null, position);
         _pendingCast = -1;
         if (_selectedCard != card) _rotation = 0;
         _selectedCard = card; _selectedPiece = null; _selectedBoard = -1;
-        CreateDragGhost(card, position);
+        ShowDragGhost(card, position);
     }
 
     /// <summary>격자의 배치 조각을 선택하고 드래그 표시를 시작한다.</summary>
     public void BeginPieceDrag(int board, SpellGame.Placement piece, Vector2 position)
     {
-        _pendingCast = -1; _selectedCard = piece.Card; _selectedPiece = piece; _selectedBoard = board; _rotation = piece.Rotation;
-        CreateDragGhost(piece.Card, position);
+        if (!_game.CanMovePiece(piece)) { _message = "이전 턴 조각과 시전 후 남은 잔상은 이동할 수 없습니다"; Render(); return; }
+        _pendingCast = -1; _selectedCard = piece.Card; _selectedPiece = piece; _selectedBoard = board;
+        Vector2Int anchor;
+        _layout.PieceToGrid(board, piece, out anchor, out _rotation);
+        ShowDragGhost(piece.Card, position);
     }
 
-    /// <summary>지정 조각의 포인터 추적용 모양을 생성한다.</summary>
-    private void CreateDragGhost(SpellGame.Card card, Vector2 position)
+    /// <summary>미리 만들어 둔 조각 고스트를 카드 모양·회전으로 켠다.</summary>
+    private void ShowDragGhost(SpellGame.Card card, Vector2 position)
     {
-        float width = card.Shape == SpellGame.Shape.Rectangle ? 144 : 72;
-        _dragGhost = Element("Drag Preview", _root, 0, 0, width, 72);
-        _dragGhost.pivot = new Vector2(0.5f, 0.5f);
-        _dragGhost.localRotation = Quaternion.Euler(0, 0, -90 * _rotation);
-        _dragGhost.gameObject.AddComponent<CanvasRenderer>();
-        SpellShapeGraphic icon = _dragGhost.gameObject.AddComponent<SpellShapeGraphic>();
-        icon.raycastTarget = false; icon.Shape = card.Shape;
+        RectTransform ghost = _combatScreen.PieceGhost;
+        float cell = _boardGraphic.CellSize;
+        ghost.sizeDelta = card.Shape == SpellGame.Shape.Rectangle ? new Vector2(2 * cell, cell) : new Vector2(cell, cell);
+        ghost.localRotation = Quaternion.Euler(0, 0, -90 * _rotation);
+        _combatScreen.PieceGhostShape.Shape = card.Shape;
+        Color color = card.Effect == SpellGame.Effect.None ? Color.white : EffectColor(card.Effect);
+        _combatScreen.PieceGhostShape.color = new Color(color.r, color.g, color.b, 0.85f);
+        ghost.gameObject.SetActive(true);
+        _dragGhost = ghost;
         MoveCardDrag(position);
     }
 
+    /// <summary>조각 고스트를 숨긴다.</summary>
+    private void HideDragGhost()
+    {
+        if (_dragGhost != null) _dragGhost.gameObject.SetActive(false);
+        _dragGhost = null;
+    }
+
     /// <summary>배치 조각을 손패로 회수하거나 유효한 격자 위치로 이동한다.</summary>
-    public void EndPieceDrag(PointerEventData eventData, bool hasDestination, int board, int x, int y)
+    public void EndPieceDrag(PointerEventData eventData, bool hasDestination, int board, Vector2Int anchor)
     {
         if (_selectedPiece == null || !CanInteract) return;
-        if (_dragGhost != null) Destroy(_dragGhost.gameObject);
-        _dragGhost = null;
-        Vector2 point;
-        bool onHand = RectTransformUtility.ScreenPointToLocalPointInRectangle(_root, eventData.position, null, out point)
-            && point.x - _root.rect.xMin >= 30 && point.x - _root.rect.xMin < 1066
-            && _root.rect.yMax - point.y >= 525 && _root.rect.yMax - point.y <= 651;
+        HideDragGhost();
+        bool onHand = RectTransformUtility.RectangleContainsScreenPoint(_combatScreen.HandDropArea, eventData.position, eventData.pressEventCamera);
         if (onHand)
         {
             if (_game.Recall(_selectedBoard, _selectedPiece)) { ClearSelection(); _message = "조각을 손패로 되돌렸습니다"; }
             else { ClearSelection(); _message = "손패가 가득 차 회수할 수 없습니다"; }
             Render();
         }
-        else if (hasDestination) ClickGrid(board, x, y);
+        else if (hasDestination) ClickGrid(board, anchor);
         else { ClearSelection(); _message = "도안이나 손패 위에 놓아 주세요"; Render(); }
     }
 
     /// <summary>드래그 중인 도형을 화면 좌표로 이동한다.</summary>
     public void MoveCardDrag(Vector2 position)
     {
-        if (_dragGhost == null) return;
-        Vector2 point;
-        if (RectTransformUtility.ScreenPointToLocalPointInRectangle(_root, position, null, out point))
-        {
-            Rect rect = _root.rect;
-            _dragGhost.anchoredPosition = new Vector2(point.x - rect.xMin, point.y - rect.yMax);
-        }
+        if (_dragGhost != null) _dragGhost.anchoredPosition = ToLayer(position);
     }
 
     /// <summary>드래그 중인 카드를 격자 위에 미리 표시한다.</summary>
     public void PreviewCardDrag(PointerEventData eventData)
     {
-        if (_boardGraphic != null) _boardGraphic.PreviewCard(eventData);
+        _boardGraphic.PreviewCard(eventData);
     }
 
     /// <summary>드롭 지점이 제작판이면 배치하고, 아니면 선택을 유지한다.</summary>
     public void EndCardDrag(PointerEventData eventData)
     {
         if (_selectedCard == null || !CanInteract) return;
-        if (_dragGhost != null) Destroy(_dragGhost.gameObject);
-        _dragGhost = null;
+        HideDragGhost();
         if (_boardGraphic.TryDrop(eventData)) return;
         _message = "도안의 색 테두리 안에 놓아 주세요"; Render();
     }
 
-    /// <summary>현재 선택한 카드와 회전을 반환한다.</summary>
-    public SpellGame.Card SelectedCard { get { return _selectedCard; } }
-    public int Rotation { get { return _rotation; } }
-    public bool CanInteract { get { return isActiveAndEnabled && !_showPauseMenu && !_showHelp && _game.CurrentPhase == SpellGame.Phase.Combat; } }
-
-    /// <summary>목록에서 이동하는 도안의 미리 보기를 현재 제작판에 전달한다.</summary>
-    public void PreviewPatternDrag(PointerEventData eventData, int pattern)
-    {
-        if (CanInteract) _boardGraphic.PreviewPattern(eventData, pattern, Vector2Int.zero);
-    }
-
-    /// <summary>목록에서 이동한 도안의 미리 보기를 지우고 드롭 위치를 적용한다.</summary>
-    public void EndPatternDrag(PointerEventData eventData, int pattern)
+    /// <summary>도안 이동 핸들에서 드래그를 시작한다. 핸들은 도안의 왼쪽 위 칸을 잡은 것으로 본다.</summary>
+    public void BeginPatternDrag(PointerEventData eventData, int pattern)
     {
         if (!CanInteract) return;
-        _boardGraphic.ClearPatternPreview();
-        _boardGraphic.DropPattern(eventData, pattern);
+        ShowTextTooltip(null, eventData.position);
+        _boardGraphic.BeginPatternDrag(pattern, Vector2Int.zero);
+        _boardGraphic.PreviewPattern(eventData);
+    }
+
+    /// <summary>이동 핸들로 끄는 도안의 고스트와 스냅 미리 보기를 갱신한다.</summary>
+    public void PreviewPatternDrag(PointerEventData eventData)
+    {
+        if (CanInteract) _boardGraphic.PreviewPattern(eventData);
+    }
+
+    /// <summary>이동 핸들로 끈 도안을 놓아 위치·회전을 확정하거나 원래대로 둔다.</summary>
+    public void EndPatternDrag(PointerEventData eventData)
+    {
+        if (CanInteract) _boardGraphic.EndPatternDrag(eventData);
+        else _boardGraphic.CancelDrag();
     }
 }
-
-

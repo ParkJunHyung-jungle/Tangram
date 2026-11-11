@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 
@@ -47,18 +47,20 @@ public sealed class SpellGame
     public sealed class Enemy
     {
         private readonly int[] _pattern;
+        private readonly ReadOnlyCollection<int> _patternView;
 
         public string Name { get; internal set; }
         public int Health { get; internal set; }
         public int MaxHealth { get; internal set; }
 
         public int Intent { get { return _pattern[ActionCount % _pattern.Length]; } }
+        public ReadOnlyCollection<int> Pattern { get { return _patternView; } }
         internal int ActionCount;
 
         /// <summary>이름, 체력과 공격 패턴으로 적의 전투 상태를 초기화한다.</summary>
         internal Enemy(string name, int health, int[] pattern)
         {
-            Name = name; Health = health; MaxHealth = health; _pattern = pattern;
+            Name = name; Health = health; MaxHealth = health; _pattern = pattern; _patternView = Array.AsReadOnly(pattern);
         }
     }
 
@@ -82,11 +84,33 @@ public sealed class SpellGame
     public int Block { get; private set; }
     public int Battle { get; private set; }
     public int Turn { get; private set; }
-    public int PlacementsLeft { get; private set; }
     public int Target { get; private set; }
     public int DrawCount { get { return _draw.Count; } }
     public int DiscardCount { get { return _discard.Count; } }
     public int CraftCount { get { int count = 0; foreach (Board board in Boards) count += board.Pieces.Count; return count; } }
+
+    /// <summary>드로우 또는 버림 더미의 조각별 수량을 읽기 전용 요약으로 반환한다.</summary>
+    public Dictionary<string, int> GetPileSummary(bool isDrawPile)
+    {
+        Dictionary<string, int> summary = new Dictionary<string, int>();
+        foreach (Card card in isDrawPile ? _draw : _discard)
+        {
+            string key = card.Shape + ":" + card.Effect;
+            if (!summary.ContainsKey(key)) summary.Add(key, 0);
+            summary[key]++;
+        }
+        return summary;
+    }
+
+    /// <summary>지정한 도안의 현재 조각 효과를 반영한 공격 피해를 반환한다.</summary>
+    public int GetSpellDamage(int boardIndex)
+    {
+        if (boardIndex < 0 || boardIndex >= Boards.Count || boardIndex == 1) return 0;
+        int damage = boardIndex == 0 ? 6 : boardIndex == 2 ? 12 : 10;
+        foreach (Placement piece in Boards[boardIndex].Pieces)
+            if (piece.Card.Effect == Effect.Flame) damage += 2;
+        return damage;
+    }
 
     /// <summary>카드, 적, 도안과 제작판의 읽기 전용 목록을 연결한다.</summary>
     public SpellGame()
@@ -154,8 +178,8 @@ public sealed class SpellGame
         }
     }
 
-    /// <summary>새 턴에 배치 횟수를 갱신하고 카드를 뽑는다.</summary>
-    private void StartTurn() { Turn++; PlacementsLeft = 3; Draw(5); }
+    /// <summary>새 턴을 시작하고 카드를 뽑는다.</summary>
+    private void StartTurn() { Turn++; Draw(5); }
 
     /// <summary>손패 한도를 지키며 지정 수만큼 카드를 뽑는다.</summary>
     private void Draw(int count)
@@ -244,36 +268,39 @@ public sealed class SpellGame
         return true;
     }
 
-    /// <summary>손패 카드를 도안에 배치하고 배치 횟수를 소비한다.</summary>
+    /// <summary>손패 카드를 도안의 유효한 위치에 배치한다.</summary>
     public bool Place(int board, Card card, int x, int y, int rotation)
     {
-        if (PlacementsLeft <= 0 || !Hand.Contains(card) || !CanPlace(board, card, x, y, rotation)) return false;
-        _hand.Remove(card); PlacementsLeft--; Boards[board].MutablePieces.Add(new Placement { Card = card, X = x, Y = y, Rotation = rotation, Turn = Turn, CanRefund = true }); return true;
+        if (!Hand.Contains(card) || !CanPlace(board, card, x, y, rotation)) return false;
+        _hand.Remove(card); Boards[board].MutablePieces.Add(new Placement { Card = card, X = x, Y = y, Rotation = rotation, Turn = Turn, CanRefund = true }); return true;
     }
+
+    /// <summary>현재 턴에 배치한 미시전 조각만 개별 이동하거나 회수할 수 있는지 반환한다.</summary>
+    public bool CanMovePiece(Placement piece) { return piece != null && piece.Turn == Turn && !piece.HasPersisted && piece.CanRefund; }
 
     /// <summary>배치된 조각을 비용 없이 다른 위치 또는 판으로 옮긴다.</summary>
     public bool Move(int source, Placement piece, int destination, int x, int y, int rotation)
     {
-        if (source < 0 || source >= Boards.Count || piece == null || !Boards[source].Pieces.Contains(piece) || !CanPlace(destination, piece.Card, x, y, rotation, source == destination ? piece : null)) return false;
+        if (source < 0 || source >= Boards.Count || !CanMovePiece(piece) || !Boards[source].Pieces.Contains(piece) || !CanPlace(destination, piece.Card, x, y, rotation, source == destination ? piece : null)) return false;
         Boards[source].MutablePieces.Remove(piece); piece.X = x; piece.Y = y; piece.Rotation = rotation; Boards[destination].MutablePieces.Add(piece); return true;
     }
 
-    /// <summary>배치 조각을 손패로 회수하고 이번 턴의 미시전 배치 비용만 반환한다.</summary>
+    /// <summary>현재 턴의 미시전 조각을 손패로 회수한다.</summary>
     public bool Recall(int board, Placement piece)
     {
-        if (CurrentPhase != Phase.Combat || board < 0 || board >= Boards.Count || piece == null || Hand.Count >= 7 || !Boards[board].MutablePieces.Remove(piece)) return false;
-        _hand.Add(piece.Card); if (piece.Turn == Turn && piece.CanRefund) PlacementsLeft++; return true;
+        if (CurrentPhase != Phase.Combat || board < 0 || board >= Boards.Count || !CanMovePiece(piece) || Hand.Count >= 7 || !Boards[board].MutablePieces.Remove(piece)) return false;
+        _hand.Add(piece.Card); return true;
     }
 
     /// <summary>판의 현재 턴 조각은 회수하고 이전 턴 조각은 버린다.</summary>
     public bool Abandon(int board)
     {
         if (CurrentPhase != Phase.Combat || board < 0 || board >= Boards.Count) return false;
-        Board b = Boards[board]; int current = 0; foreach (Placement p in b.Pieces) if (p.Turn == Turn) current++;
+        Board b = Boards[board]; int current = 0; foreach (Placement p in b.Pieces) if (CanMovePiece(p)) current++;
         if (Hand.Count + current > 7) return false;
         foreach (Placement p in b.Pieces)
         {
-            if (p.Turn == Turn) { _hand.Add(p.Card); if (p.CanRefund) PlacementsLeft++; }
+            if (CanMovePiece(p)) { _hand.Add(p.Card); }
             else Discard(p.Card);
         }
         b.MutablePieces.Clear(); return true;
@@ -308,23 +335,20 @@ public sealed class SpellGame
         if (CurrentPhase != Phase.Combat || !IsComplete(boardIndex)) return false;
         if ((boardIndex == 0 || boardIndex == 2) && (target < 0 || target >= Enemies.Count || Enemies[target].Health <= 0)) return false;
         if (boardIndex == 0 || boardIndex == 2) Target = target;
-        Board board = Boards[boardIndex]; int flame = 0, guard = 0, extraPlacements = 0;
+        Board board = Boards[boardIndex]; int guard = 0, extraPlacements = 0;
         foreach (Placement p in board.Pieces)
         {
-            if (p.Card.Effect == Effect.Flame) flame += 2;
             if (p.Card.Effect == Effect.Guard) guard += 3;
             if (p.Card.Effect == Effect.Resonance && board.Spell >= 2) extraPlacements++;
         }
-        int damage = board.Spell == 0 ? 6 : board.Spell == 2 ? 12 : board.Spell == 3 ? 10 : 0;
+        int damage = GetSpellDamage(boardIndex);
         Block += guard + (board.Spell == 1 ? 7 : 0);
         if (damage > 0)
         {
-            damage += flame;
             if (board.Spell == 3) { foreach (Enemy enemy in Enemies) if (enemy.Health > 0) enemy.Health -= damage; }
             else Enemies[Target].Health -= damage;
         }
         bool alive = false; for (int i = 0; i < Enemies.Count; i++) if (Enemies[i].Health > 0) { if (!alive && Enemies[Target].Health <= 0) Target = i; alive = true; }
-        PlacementsLeft += extraPlacements;
         for (int i = board.Pieces.Count - 1; i >= 0; i--)
         {
             Placement piece = board.Pieces[i];
@@ -332,6 +356,7 @@ public sealed class SpellGame
             if (piece.Card.Effect == Effect.Afterimage && !piece.HasPersisted) piece.Card.HasPersisted = true;
             else { Discard(piece.Card); board.MutablePieces.RemoveAt(i); }
         }
+        if (extraPlacements > 0 && alive) Draw(extraPlacements);
         if (!alive) { if (Battle == 6) CurrentPhase = Phase.Victory; else { Health = Math.Min(50, Health + 6); CurrentPhase = Phase.Reward; } }
         return true;
     }
