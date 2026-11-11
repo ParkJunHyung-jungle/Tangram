@@ -82,8 +82,6 @@ public sealed class SpellGameUI : MonoBehaviour
     private float _feedbackUntil;
     private int _feedbackVersion;
     private int _feedbackShownVersion;
-    private CanvasGroup _feedbackGroup;
-    private RectTransform _feedbackRect;
     private int _impactTarget = -1;
     private bool _impactAll;
 
@@ -127,18 +125,16 @@ public sealed class SpellGameUI : MonoBehaviour
     void Awake()
     {
         _font = Font.CreateDynamicFontFromOSFont(new[] { "Malgun Gothic", "Arial" }, 24);
-        // 타이틀·보상·결과는 4단계 전까지 기존 1280×720 화면을 1.5배로 표시한다. 오버레이 아래에 오도록 맨 앞 형제로 둔다.
-        _root = Element("Legacy Content", _content, 0, 0, 1280, 720);
+        // 꺼 둔 첫 주문 온보딩만 기존 1280×720 좌표로 그린다. 전투 화면 바로 위, 오버레이 아래에 둔다. 새 화면 연결은 다음 작업이다.
+        _root = Element("Onboarding Layer", _content, 0, 0, 1280, 720);
         _root.anchorMin = _root.anchorMax = _root.pivot = new Vector2(0.5f, 0.5f);
         _root.anchoredPosition = Vector2.zero;
         _root.localScale = Vector3.one * LEGACY_SCALE;
-        _root.SetAsFirstSibling();
-        _titleScreen.gameObject.SetActive(false);
-        _rewardScreen.gameObject.SetActive(false);
-        _resultScreen.gameObject.SetActive(false);
+        _root.SetSiblingIndex(_combatScreen.transform.GetSiblingIndex() + 1);
         _boardGraphic = _combatScreen.Board;
         _boardGraphic.Setup(this, _game, _layout);
         SetupCombatScreen();
+        SetupOtherScreens();
         SetupOverlays();
         Render();
     }
@@ -233,20 +229,14 @@ public sealed class SpellGameUI : MonoBehaviour
         _pendingCast = -1; ClearSelection(); _openPile = pile; Render();
     }
 
-    /// <summary>시전 결과의 적 강조와 기존 화면 결과 표시를 시간에 따라 흐리게 한다.</summary>
+    /// <summary>시전 결과의 적 강조를 시간에 따라 흐리게 한다.</summary>
     private void UpdateFeedback()
     {
+        if (_game.CurrentPhase != SpellGame.Phase.Combat) return;
         float remaining = _feedbackUntil - Time.unscaledTime;
-        if (_game.CurrentPhase == SpellGame.Phase.Combat)
-        {
-            SpellEnemyView[] enemies = _combatScreen.Enemies;
-            float alpha = remaining > 0 ? 0.32f * Mathf.Clamp01((remaining - 1.05f) / 0.45f) : 0;
-            for (int i = 0; i < enemies.Length; i++) enemies[i].SetImpact(_feedbackColor, (_impactAll || i == _impactTarget) ? alpha : 0);
-        }
-        if (_feedbackGroup == null) return;
-        _feedbackGroup.alpha = Mathf.Clamp01(remaining / 0.35f);
-        _feedbackRect.localScale = Vector3.one * (1f + 0.04f * Mathf.Clamp01((remaining - 1.1f) / 0.25f));
-        if (remaining <= 0) { _feedbackGroup.gameObject.SetActive(false); _feedbackGroup = null; }
+        SpellEnemyView[] enemies = _combatScreen.Enemies;
+        float alpha = remaining > 0 ? 0.32f * Mathf.Clamp01((remaining - 1.05f) / 0.45f) : 0;
+        for (int i = 0; i < enemies.Length; i++) enemies[i].SetImpact(_feedbackColor, (_impactAll || i == _impactTarget) ? alpha : 0);
     }
 
     /// <summary>선택·조준·도안 이동 중에만 조작 안내를 커서 옆에 표시한다.</summary>
@@ -318,48 +308,49 @@ public sealed class SpellGameUI : MonoBehaviour
         _castDragging = false; _hoverEnemy = -1;
         _combatScreen.Tooltip.Hide();
         _combatScreen.MoreMenu.Close();
-        bool combat = _game.CurrentPhase == SpellGame.Phase.Combat;
+        SpellGame.Phase phase = _game.CurrentPhase;
+        bool combat = phase == SpellGame.Phase.Combat;
+        bool result = phase == SpellGame.Phase.Victory || phase == SpellGame.Phase.Defeat;
         _combatScreen.gameObject.SetActive(combat);
-        _root.gameObject.SetActive(!combat);
-        if (combat) RefreshCombat(); else RenderLegacy();
+        _titleScreen.gameObject.SetActive(phase == SpellGame.Phase.Title);
+        _rewardScreen.gameObject.SetActive(phase == SpellGame.Phase.Reward);
+        _resultScreen.gameObject.SetActive(result);
+        if (combat) RefreshCombat();
+        else if (phase == SpellGame.Phase.Reward) RefreshRewards();
+        else if (result) _resultScreen.Bind(phase == SpellGame.Phase.Victory ? "승리" : "패배");
+        RenderOnboardingLayer(combat);
         RefreshOverlays();
-        _renderedPhase = _game.CurrentPhase;
+        _renderedPhase = phase;
     }
 
-    /// <summary>타이틀·보상·결과 화면을 기존 방식으로 그린다. 4단계에서 공용 Prefab으로 바꾼다.</summary>
-    private void RenderLegacy()
+    /// <summary>타이틀 시작·결과 다시 시작·보상 건너뛰기 버튼의 동작을 연결한다.</summary>
+    private void SetupOtherScreens()
     {
-        _feedbackGroup = null; _onboardingGhost = null; _onboardingGhostGroup = null; _onboardingGhostIcon = null;
+        _titleScreen.StartButton.SetAction(StartNewGame);
+        _resultScreen.Restart.SetAction(StartNewGame);
+        _rewardScreen.Skip.SetAction(() => ChooseReward(-1));
+    }
+
+    /// <summary>새 게임을 시작하고 도안 배치와 선택을 초기화한다.</summary>
+    private void StartNewGame()
+    {
+        _game.StartGame(); ResetPatterns(); ClearSelection(); Render();
+    }
+
+    /// <summary>보상을 고르거나(-1은 건너뛰기) 다음 전투로 넘어간다.</summary>
+    private void ChooseReward(int reward)
+    {
+        if (_game.ChooseReward(reward)) { ClearSelection(); _message = ""; Render(); }
+    }
+
+    /// <summary>꺼 둔 첫 주문 온보딩 층을 비우고, 켜져 있으면 전투 중에만 다시 그린다.</summary>
+    private void RenderOnboardingLayer(bool combat)
+    {
+        _onboardingGhost = null; _onboardingGhostGroup = null; _onboardingGhostIcon = null;
         foreach (Transform child in _root) { child.gameObject.SetActive(false); Destroy(child.gameObject); }
-        Panel(_root, 0, 0, 1280, 720, new Color(0.059f, 0.078f, 0.149f));
-        if (_game.CurrentPhase == SpellGame.Phase.Title)
-        {
-            Label(_root, "주문 조각", 340, 170, 600, 90, 48);
-            RectTransform divider = Panel(_root, 500, 322, 280, 2, new Color(0.80f, 0.65f, 0.38f));
-            divider.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
-            Button(_root, "시작", 520, 360, 240, 64, () => { _game.StartGame(); ResetPatterns(); ClearSelection(); Render(); });
-            Label(_root, "도형 드래그 → 도안 완성 → 시전 버튼\nR 또는 우클릭으로 회전", 300, 502, 680, 65, 17);
-        }
-        else if (_game.CurrentPhase == SpellGame.Phase.Reward) RenderRewards();
-        else
-        {
-            Label(_root, _game.CurrentPhase == SpellGame.Phase.Victory ? "승리" : "패배", 340, 190, 600, 90, 48);
-            Button(_root, "다시 시작", 520, 350, 240, 64, () => { _game.StartGame(); ResetPatterns(); ClearSelection(); Render(); });
-        }
-        RenderFeedback();
-    }
-
-    /// <summary>기존 화면 위에 시전 결과를 겹쳐 표시한다.</summary>
-    private void RenderFeedback()
-    {
-        if (Time.unscaledTime >= _feedbackUntil || string.IsNullOrEmpty(_feedback)) return;
-        _feedbackRect = Panel(_root, 390, 440, 500, 46, new Color(0.09f, 0.13f, 0.17f, 0.95f));
-        _feedbackRect.gameObject.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
-        _feedbackGroup = _feedbackRect.gameObject.AddComponent<CanvasGroup>();
-        _feedbackGroup.blocksRaycasts = false; _feedbackGroup.interactable = false;
-        RectTransform stripe = Panel(_feedbackRect, 0, 0, 6, 46, _feedbackColor);
-        stripe.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
-        Label(_feedbackRect, _feedback, 14, 0, 474, 46, 19);
+        bool show = ONBOARDING_ENABLED && combat && !_onboardingComplete;
+        _root.gameObject.SetActive(show);
+        if (show) RenderOnboarding();
     }
 
     /// <summary>일시정지·도움말·더미 열람 오버레이를 상태에 맞게 켜고 내용을 갱신한다.</summary>
@@ -999,8 +990,8 @@ public sealed class SpellGameUI : MonoBehaviour
         }
     }
 
-    /// <summary>미보유 도안이 있으면 혼합 후보 세 개, 없으면 특수 카드 네 종류를 표시한다.</summary>
-    private void RenderRewards()
+    /// <summary>미보유 도안이 있으면 혼합 후보 세 개, 없으면 특수 카드 네 종류를 보상 화면에 표시한다. 후보는 보상 단계에 처음 들어올 때만 뽑는다.</summary>
+    private void RefreshRewards()
     {
         if (_renderedPhase != SpellGame.Phase.Reward)
         {
@@ -1014,42 +1005,19 @@ public sealed class SpellGameUI : MonoBehaviour
             }
             for (int i = _rewards.Count - 1; i > 0; i--) { int j = _random.Next(i + 1); int t = _rewards[i]; _rewards[i] = _rewards[j]; _rewards[j] = t; }
         }
-        Label(_root, "전투 승리 · 체력 최대 6 회복", 300, 110, 680, 60, 30);
-        Label(_root, "보상 하나를 선택하세요", 300, 180, 680, 45, 22);
-        float startX = (1280 - (_rewards.Count * 285 + (_rewards.Count - 1) * 20)) / 2f;
-        for (int i = 0; i < _rewards.Count; i++) RenderRewardCard(_rewards[i], startX + 305 * i);
-        Button(_root, "건너뛰기", 530, 490, 220, 55, () => { _game.ChooseReward(-1); ClearSelection(); Render(); });
-    }
-
-    /// <summary>보상 종류와 실제 도형 또는 도안을 함께 표시하고 선택 동작을 연결한다.</summary>
-    private void RenderRewardCard(int reward, float x)
-    {
-        bool isSpell = reward >= 4;
-        Color accent = isSpell ? PatternColor(reward - 2) : EffectColor(reward == 0 ? SpellGame.Effect.Flame : reward == 1 ? SpellGame.Effect.Guard : reward == 2 ? SpellGame.Effect.Resonance : SpellGame.Effect.Afterimage);
-        RectTransform card = Panel(_root, x, 250, 285, 195, new Color(0.24f, 0.31f, 0.38f));
-        UnityEngine.UI.Button button = card.gameObject.AddComponent<UnityEngine.UI.Button>();
-        button.onClick.AddListener(() => { if (_game.ChooseReward(reward)) { ClearSelection(); _message = ""; Render(); } });
-        RectTransform stripe = Panel(card, 0, 0, 285, 5, accent);
-        stripe.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
-        Label(card, isSpell ? "새 도안" : "특수 조각", 8, 7, 269, 27, 15);
-        if (isSpell)
+        SpellRewardCardView[] cards = _rewardScreen.Cards;
+        _rewardScreen.ShowCards(Mathf.Min(_rewards.Count, cards.Length));
+        for (int i = 0; i < _rewards.Count && i < cards.Length; i++)
         {
-            foreach (Vector2Int cell in PATTERN_CELLS[reward - 2])
+            int reward = _rewards[i];
+            if (reward >= 4) cards[i].BindPattern(reward, REWARD_NAMES[reward], PATTERN_CELLS[reward - 2], PatternColor(reward - 2), ChooseReward);
+            else
             {
-                RectTransform tile = Panel(card, 111 + cell.x * 32, 40 + cell.y * 32, 28, 28, accent);
-                tile.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
+                SpellGame.Effect effect = reward == 0 ? SpellGame.Effect.Flame : reward == 1 ? SpellGame.Effect.Guard : reward == 2 ? SpellGame.Effect.Resonance : SpellGame.Effect.Afterimage;
+                SpellGame.Shape shape = reward == 0 ? SpellGame.Shape.Triangle : reward == 1 ? SpellGame.Shape.Square : reward == 2 ? SpellGame.Shape.Rectangle : SpellGame.Shape.QuarterTriangle;
+                cards[i].BindPiece(reward, REWARD_NAMES[reward], shape, EffectColor(effect), ChooseReward);
             }
         }
-        else
-        {
-            SpellGame.Shape shape = reward == 0 ? SpellGame.Shape.Triangle : reward == 1 ? SpellGame.Shape.Square : reward == 2 ? SpellGame.Shape.Rectangle : SpellGame.Shape.QuarterTriangle;
-            float width = shape == SpellGame.Shape.Rectangle ? 112 : 56;
-            RectTransform iconRect = Element("Reward Shape", card, (285 - width) / 2, 40, width, 56);
-            iconRect.gameObject.AddComponent<CanvasRenderer>();
-            SpellShapeGraphic icon = iconRect.gameObject.AddComponent<SpellShapeGraphic>();
-            icon.raycastTarget = false; icon.Shape = shape; icon.color = accent;
-        }
-        Label(card, REWARD_NAMES[reward], 8, 110, 269, 70, 20);
     }
 
     /// <summary>배치한 조각을 이동 또는 회수 대상으로 선택한다.</summary>
