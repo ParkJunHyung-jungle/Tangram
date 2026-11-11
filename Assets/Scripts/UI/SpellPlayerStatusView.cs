@@ -12,6 +12,7 @@ public sealed class SpellPlayerStatusView : MonoBehaviour
     public void Bind(int health, int maxHealth, int defense)
     {
         _health.Bind(health, maxHealth, 0, $"체력 {health} / {maxHealth}");
+        _health.BindDefense(defense, maxHealth);
         _defense.text = $"방어 {defense}";
     }
 }

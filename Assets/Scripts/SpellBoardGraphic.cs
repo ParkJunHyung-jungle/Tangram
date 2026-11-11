@@ -150,7 +150,13 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
                 if (preview && (CellMask(selected, _hoverX, _hoverY, _ui.Rotation, x, y) & (1 << sector)) != 0) color = valid ? _validColor : _invalidColor;
                 Sector(vh, center, _corners[sector], _corners[(sector + 1) % 4], color);
             }
-            for (int side = 0; side < 4; side++) Line(vh, center, _corners[side], 1.2f, _guideColor);
+            Color gridColor = Color.Lerp(_guideColor, Color.white, 0.35f);
+            gridColor.a = 1f;
+            for (int side = 0; side < 4; side++)
+            {
+                Line(vh, center, _corners[side], 1.2f, gridColor);
+                Line(vh, _corners[side], _corners[(side + 1) % 4], 1.2f, gridColor);
+            }
             for (int sector = 0; sector < 4; sector++)
             {
                 int owner;
@@ -260,6 +266,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     /// <summary>도안 이동을 시작한다. grabRotated는 회전된 도안 범위 안에서 잡은 칸이다.</summary>
     public void BeginPatternDrag(int pattern, Vector2Int grabRotated)
     {
+        if (!_ui.CanMovePattern(pattern)) { _ui.SetPatternHint("고정된 조각이 있는 도안은 이동할 수 없습니다"); return; }
         _dragPattern = pattern; _dragRotation = _layout.Rotation(pattern);
         _grabLocal = SpellPatternLayout.UnrotateLocal(pattern, _dragRotation, grabRotated);
         _hasPatternPreview = false; _hoverX = _hoverY = -1;
@@ -335,7 +342,8 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
             if (tooltip != null && tooltip.Effect == SpellGame.Effect.None) tooltip = null;
         }
         else _ui.SetOutsidePreviewHint();
-        _ui.ShowPieceTooltip(tooltip, data.position);
+        if (_layout.TryFindTarget(x, y, sector, _game.Spells, out spell) && !_dragPiece && _ui.SelectedCard == null) _ui.ShowPatternTooltip(spell, data.position, tooltip);
+        else _ui.ShowPieceTooltip(null, data.position);
         SetVerticesDirty();
     }
 
@@ -393,6 +401,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
         int owner;
         if (piece != null && _layout.TryFindOwner(x, y, sector, _game.Spells, out owner))
         {
+            if (!_game.CanMovePiece(piece)) { _ui.SelectPiece(owner, piece); return; }
             Vector2Int anchor; int gridRotation;
             _layout.PieceToGrid(owner, piece, out anchor, out gridRotation);
             _dragPiece = true; _pieceOffset = new Vector2Int(x, y) - anchor; _hoverX = _hoverY = -1;

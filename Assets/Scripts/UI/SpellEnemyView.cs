@@ -71,7 +71,7 @@ public sealed class SpellEnemyView : MonoBehaviour
         _intent.gameObject.SetActive(!dead);
         _intent.anchoredPosition = new Vector2(0, silhouetteBottom + size.y + (boss ? BOSS_INTENT_GAP : INTENT_GAP));
         _intentValue.text = intent.ToString();
-        _pattern.gameObject.SetActive(!dead && !string.IsNullOrEmpty(patternText));
+        _pattern.gameObject.SetActive(false);
         _pattern.text = patternText;
         _name.text = dead ? $"{displayName} · 쓰러짐" : displayName;
         _name.color = dead ? _deadNameColor : _nameColor;
@@ -80,7 +80,7 @@ public sealed class SpellEnemyView : MonoBehaviour
         int shownDamage = aiming ? previewDamage : 0;
         int after = Mathf.Max(0, health - shownDamage);
         _health.Bind(health, maxHealth, shownDamage, shownDamage > 0 ? $"{health} → {after} / {maxHealth}" : $"{health} / {maxHealth}");
-        _targetChip.SetActive(target && !dead && !aiming);
+        _targetChip.SetActive(false);
         _aimFrame.gameObject.SetActive(aiming && !dead);
         _aimFrame.sizeDelta = size + Vector2.one * AIM_PADDING * 2;
         _aimFrame.anchoredPosition = new Vector2(0, silhouetteBottom - AIM_PADDING);
