@@ -9,7 +9,7 @@ public sealed class SpellPatternDrag : MonoBehaviour, IBeginDragHandler, IDragHa
 
     /// <summary>이 항목이 이동할 도안을 설정한다.</summary>
     public void Setup(SpellGameUI ui, int pattern) { _ui = ui; _pattern = pattern; }
-    public void OnBeginDrag(PointerEventData eventData) { }
+    public void OnBeginDrag(PointerEventData eventData) { if (isActiveAndEnabled && eventData.button == PointerEventData.InputButton.Left) _ui.BeginPatternDrag(); }
     public void OnDrag(PointerEventData eventData)
     {
         if (isActiveAndEnabled && eventData.button == PointerEventData.InputButton.Left) _ui.PreviewPatternDrag(eventData, _pattern);

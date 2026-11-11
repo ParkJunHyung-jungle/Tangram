@@ -15,15 +15,15 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     private int _previewPattern = -1;
     private Vector2Int _previewOrigin;
 
+    public bool IsDragging { get { return _dragPiece || _dragPattern >= 0; } }
+
     /// <summary>표시할 게임 상태를 설정한다.</summary>
     public void Setup(SpellGameUI ui, SpellGame game) { _ui = ui; _game = game; SetVerticesDirty(); }
 
     /// <summary>도형이 지정 칸에서 차지하는 삼각 구역 마스크를 반환한다.</summary>
     private static int CellMask(SpellGame.Card card, int x, int y, int rotation, int cellX, int cellY)
     {
-        if (cellX == x && cellY == y) return card.Shape == SpellGame.Shape.QuarterTriangle ? 1 << rotation : card.Shape == SpellGame.Shape.Triangle ? (1 << rotation) | (1 << ((rotation + 1) % 4)) : 15;
-        if (card.Shape == SpellGame.Shape.Rectangle && cellX == x + (rotation % 2 == 0 ? 1 : 0) && cellY == y + (rotation % 2 == 1 ? 1 : 0)) return 15;
-        return 0;
+        return SpellGame.CellMask(card, rotation, cellX - x, cellY - y);
     }
 
     /// <summary>선분에 두께를 주어 격자 경계 또는 도형 경계를 그린다.</summary>
@@ -57,7 +57,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
                 if (active) foreach (SpellGame.Placement p in _game.Boards[board].Pieces)
                 {
                     if ((CellMask(p.Card, p.X, p.Y, p.Rotation, lx, ly) & (1 << sector)) == 0) continue;
-                    color = p.Card.Effect == SpellGame.Effect.Flame ? new Color(0.85f, 0.42f, 0.2f) : p.Card.Effect == SpellGame.Effect.Guard ? new Color(0.28f, 0.55f, 0.8f) : p.Card.Effect == SpellGame.Effect.Resonance ? new Color(0.65f, 0.40f, 0.8f) : p.Card.Effect == SpellGame.Effect.Afterimage ? p.HasPersisted ? new Color(0.18f, 0.43f, 0.41f) : new Color(0.31f, 0.76f, 0.68f) : new Color(0.68f, 0.73f, 0.75f);
+                    color = SpellGame.EffectCount(p.Card, SpellGame.Effect.Flame) > 0 ? new Color(0.85f, 0.42f, 0.2f) : SpellGame.EffectCount(p.Card, SpellGame.Effect.Guard) > 0 ? new Color(0.28f, 0.55f, 0.8f) : SpellGame.EffectCount(p.Card, SpellGame.Effect.Resonance) > 0 ? new Color(0.65f, 0.40f, 0.8f) : SpellGame.EffectCount(p.Card, SpellGame.Effect.Afterimage) > 0 ? p.HasPersisted ? new Color(0.18f, 0.43f, 0.41f) : new Color(0.31f, 0.76f, 0.68f) : new Color(0.68f, 0.73f, 0.75f);
                 }
                 if (preview && board == hoverBoard && (CellMask(_ui.SelectedCard, hoverLocalX, hoverLocalY, _ui.Rotation, lx, ly) & (1 << sector)) != 0) color = valid ? new Color(0.55f, 0.87f, 0.66f) : new Color(0.9f, 0.3f, 0.3f);
                 int start = vh.currentVertCount; UIVertex v = UIVertex.simpleVert; v.color = color;
@@ -173,6 +173,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     public void OnPointerExit(PointerEventData data) { _hoverX = _hoverY = -1; _ui.SetPreviewHint(-1, -1, -1); SetVerticesDirty(); }
     public void OnPointerClick(PointerEventData data)
     {
+        if (!_ui.CanInteract || !isActiveAndEnabled) return;
         if (data.button != PointerEventData.InputButton.Left) return;
         int x, y, sector, board, lx, ly;
         if (!GetCell(data, out x, out y, out sector)) return;
