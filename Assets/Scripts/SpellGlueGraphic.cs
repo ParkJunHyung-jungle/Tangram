@@ -43,6 +43,7 @@ public sealed class SpellGlueGraphic : UnityEngine.UI.MaskableGraphic, IPointerC
             int rotation = _ui.GlueRotation(part);
             Vector2Int position = _ui.GluePosition(part);
             Color fill = part == 0 ? new Color(0.35f, 0.68f, 0.87f, 0.85f) : new Color(0.9f, 0.69f, 0.32f, 0.85f);
+            if (_ui.IsGluePartCursed(part)) fill = Color.red;
             Color edge = valid ? new Color(0.4f, 1f, 0.6f) : new Color(1f, 0.35f, 0.32f);
             for (int y = 0; y < SpellGame.ShapeHeight(card, rotation); y++) for (int x = 0; x < SpellGame.ShapeWidth(card, rotation); x++)
             {

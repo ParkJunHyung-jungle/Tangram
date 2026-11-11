@@ -6,11 +6,12 @@ public sealed class SpellShapeGraphic : UnityEngine.UI.MaskableGraphic
     private SpellGame.Shape _shape;
     private SpellGame.Card _card;
     private int _rotation;
+    private bool _isCursed;
 
     public SpellGame.Shape Shape { get { return _shape; } set { _shape = value; SetVerticesDirty(); } }
 
-    /// <summary>실제 카드 점유 영역과 전체 회전을 아이콘에 연결한다.</summary>
-    public void SetCard(SpellGame.Card card, int rotation = 0) { _card = card; _rotation = rotation; SetVerticesDirty(); }
+    /// <summary>카드 점유 영역, 회전과 저주 여부를 연결하고 저주 도형은 빨간색으로 표시한다.</summary>
+    public void SetCard(SpellGame.Card card, int rotation = 0, bool isCursed = false) { _card = card; _rotation = rotation; _isCursed = isCursed; SetVerticesDirty(); }
 
     /// <summary>도형 종류에 맞는 정사각형, 삼각형 또는 두 칸 직사각형을 그린다.</summary>
     protected override void OnPopulateMesh(UnityEngine.UI.VertexHelper vh)
@@ -30,7 +31,7 @@ public sealed class SpellShapeGraphic : UnityEngine.UI.MaskableGraphic
                 for (int side = 0; side < 4; side++)
                 {
                     if ((mask & (1 << side)) == 0) continue;
-                    int start = vh.currentVertCount; UIVertex v = UIVertex.simpleVert; v.color = color;
+                    int start = vh.currentVertCount; UIVertex v = UIVertex.simpleVert; v.color = _isCursed ? Color.red : color;
                     v.position = origin + new Vector2(size / 2, -size / 2); vh.AddVert(v);
                     v.position = corners[side]; vh.AddVert(v); v.position = corners[(side + 1) % 4]; vh.AddVert(v);
                     vh.AddTriangle(start, start + 1, start + 2);

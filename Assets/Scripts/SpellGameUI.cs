@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 using UnityEngine;
@@ -100,6 +100,7 @@ public sealed class SpellGameUI : MonoBehaviour
     private int _glueDragRotation;
     private bool _isSealerRun;
     private bool _isThiefRun;
+    private bool _isCurserRun;
 
     [Header("도둑손 프로토타입")]
     [SerializeField, Min(0.1f)] private float _theftIntervalSeconds = 15;
@@ -214,7 +215,7 @@ public sealed class SpellGameUI : MonoBehaviour
                 else
                 {
                     _dragGhost.sizeDelta = new Vector2(72 * SpellGame.ShapeWidth(_selectedCard, _rotation), 72 * SpellGame.ShapeHeight(_selectedCard, _rotation));
-                    _dragGhost.GetComponent<SpellShapeGraphic>().SetCard(_selectedCard, _rotation);
+                    _dragGhost.GetComponent<SpellShapeGraphic>().SetCard(_selectedCard, _rotation, _game.IsCursed(_selectedCard));
                     _boardGraphic.RefreshPreview();
                 }
             }
@@ -316,14 +317,15 @@ public sealed class SpellGameUI : MonoBehaviour
             {
                 Button(_root, "형상 봉인자 전투", 520, 435, 240, 50, () => StartRun(true), null, 17);
                 Button(_root, "도둑손 전투", 520, 495, 240, 50, () => StartRun(false, true), null, 17);
+                Button(_root, "조각 저주술사 전투", 520, 555, 240, 50, () => StartRun(false, false, true), null, 17);
             }
-            Label(_root, "도형 드래그 → 도안 완성 → 시전 버튼\nR 또는 우클릭으로 회전", 300, SceneManager.GetActiveScene().path == "Assets/Scenes/TestScene.unity" ? 555 : 502, 680, 65, 17);
+            Label(_root, "도형 드래그 → 도안 완성 → 시전 버튼\nR 또는 우클릭으로 회전", 300, SceneManager.GetActiveScene().path == "Assets/Scenes/TestScene.unity" ? 620 : 502, 680, 65, 17);
         }
         else if (_game.CurrentPhase == SpellGame.Phase.Reward) RenderRewards();
         else if (_game.CurrentPhase == SpellGame.Phase.Victory || _game.CurrentPhase == SpellGame.Phase.Defeat)
         {
             Label(_root, _game.CurrentPhase == SpellGame.Phase.Victory ? "승리" : "패배", 340, 190, 600, 90, 48);
-            Button(_root, "다시 시작", 520, 350, 240, 64, () => StartRun(_isSealerRun, _isThiefRun));
+            Button(_root, "다시 시작", 520, 350, 240, 64, () => StartRun(_isSealerRun, _isThiefRun, _isCurserRun));
         }
         else RenderCombat();
         RenderFeedback();
@@ -346,11 +348,11 @@ public sealed class SpellGameUI : MonoBehaviour
     }
 
     /// <summary>선택한 전투 진입 방식으로 새 게임을 시작하고 도안과 안내 상태를 준비한다.</summary>
-    private void StartRun(bool withSealer, bool withThief = false)
+    private void StartRun(bool withSealer, bool withThief = false, bool withCurser = false)
     {
-        ResetTheft(); _isSealerRun = withSealer; _isThiefRun = withThief;
-        _game.StartGame(withSealer, withThief); ResetPatterns(); ClearSelection();
-        if (withSealer || withThief) _onboardingComplete = true;
+        ResetTheft(); _isSealerRun = withSealer; _isThiefRun = withThief; _isCurserRun = withCurser;
+        _game.StartGame(withSealer, withThief, withCurser); ResetPatterns(); ClearSelection();
+        if (withSealer || withThief || withCurser) _onboardingComplete = true;
         _message = _game.SealNotice; _feedbackUntil = 0; Render();
     }
 
@@ -515,6 +517,12 @@ public sealed class SpellGameUI : MonoBehaviour
             }
         }
         RenderSharedBoard();
+        if (_game.Curse != null)
+        {
+            string curseStatus = _game.Curse.IsResolved ? "저주 해제 완료 · " + (_game.Curse.Resolution == SpellGame.CurseResolution.Spell ? "실제 시전" : "망치 분해")
+                : $"[저주] 카드 #{_game.Curse.Target.Id}: 이번 턴 안에 실제 시전 또는 망치 분해 · 미해결 시 HP -{_game.Curse.Amount} (방어 별개)";
+            Label(_root, curseStatus, 55, 450, 1160, 26, 16, TextAnchor.MiddleLeft);
+        }
         if (_game.HasLivingThief || _game.StolenCount > 0)
             Label(_root, $"도둑손: 접근하는 손을 클릭해 저지 · 빼앗긴 카드 {_game.StolenCount}장", 55, 450, 1100, 25, 15, TextAnchor.MiddleLeft);
         Label(_root, $"뽑기 {_game.DrawCount}   버림 {_game.DiscardCount}   제작 중 {_game.CraftCount}     {_message}", 30, 486, 1000, 35, 18, TextAnchor.MiddleLeft);
@@ -522,19 +530,26 @@ public sealed class SpellGameUI : MonoBehaviour
         {
             SpellGame.Card card = _game.Hand[i];
             RectTransform cardPanel = Panel(_root, 30 + i * 148, 525, 144, 126, CardColor(card, card == _selectedCard));
+            if (_game.IsCursed(card))
+            {
+                UnityEngine.UI.Outline outline = cardPanel.gameObject.AddComponent<UnityEngine.UI.Outline>();
+                outline.effectColor = Color.red; outline.effectDistance = new Vector2(3, 3);
+                Label(cardPanel, "저주!", 90, 2, 50, 24, 15);
+            }
             UnityEngine.UI.Button cardButton = cardPanel.gameObject.AddComponent<UnityEngine.UI.Button>();
-            cardButton.onClick.AddListener(() => { if (!CanInteract) return; _pendingCast = -1; _selectedCard = card; _selectedPiece = null; _selectedBoard = -1; _rotation = 0; _message = "R 또는 우클릭: 회전"; Render(); });
+            cardButton.onClick.AddListener(() => { if (!CanInteract) return; _pendingCast = -1; _selectedCard = card; _selectedPiece = null; _selectedBoard = -1; _rotation = 0; _message = _game.IsCursed(card) ? "저주: 실제 시전 / 망치 분해로 해제" : "R 또는 우클릭: 회전"; Render(); });
             cardPanel.gameObject.AddComponent<SpellCardDrag>().Setup(this, card);
             RectTransform iconRect = Element("Shape", cardPanel, 0, 4, 144, 72);
             iconRect.gameObject.AddComponent<CanvasRenderer>();
             SpellShapeGraphic icon = iconRect.gameObject.AddComponent<SpellShapeGraphic>();
-            icon.raycastTarget = false; icon.SetCard(card);
+            icon.raycastTarget = false; icon.SetCard(card, isCursed: _game.IsCursed(card));
             Label(cardPanel, CardName(card), 2, 78, 140, 46, 14);
         }
         int incoming = 0;
         foreach (SpellGame.Enemy enemy in _game.Enemies) if (enemy.Health > 0) incoming += enemy.Intent;
-        int expectedDamage = Math.Max(0, incoming - _game.Block);
-        Label(_root, $"예상 피해 {expectedDamage}\n공격 {incoming} − 방어 {_game.Block}", 1055, 480, 200, 58, 15);
+        int curseDamage = _game.Curse != null && !_game.Curse.IsResolved ? _game.Curse.Amount : 0;
+        int expectedDamage = Math.Max(0, incoming - _game.Block) + curseDamage;
+        Label(_root, $"예상 피해 {expectedDamage}\n공격 {incoming} − 방어 {_game.Block}" + (curseDamage > 0 ? $"\n저주 HP -{curseDamage}" : ""), 1055, 475, 200, 72, 15);
         Button(_root, "턴 종료", 1080, 550, 160, 65, EndPlayerTurn, expectedDamage >= _game.Health ? new Color(0.59f, 0.27f, 0.27f) : new Color(0.32f, 0.40f, 0.49f));
         Button(_root, "도움말 ?", 1100, 660, 140, 35, () => { _showHelp = true; Render(); }, null, 16);
         Button(_root, $"E 망치 {_game.HammerUsesLeft}회", 1040, 620, 108, 30, BeginHammer, null, 14);
@@ -703,7 +718,7 @@ public sealed class SpellGameUI : MonoBehaviour
         _pendingCast = -1; ClearSelection(); _game.EndTurn(); _message = _game.SealNotice;
         int damage = healthBefore - _game.Health;
         _impactTarget = -1; _impactAll = false;
-        ShowFeedback($"적 공격  ·  방어 {absorbed}  ·  체력 -{damage}", new Color(0.91f, 0.48f, 0.40f));
+        ShowFeedback($"턴 종료 · 저주 HP -{_game.LastCurseDamage} · 방어 {(_game.LastCurseDamage >= healthBefore ? 0 : absorbed)} · 총 HP -{damage}", new Color(0.91f, 0.48f, 0.40f));
         Render();
     }
 
@@ -859,6 +874,7 @@ public sealed class SpellGameUI : MonoBehaviour
     /// <summary>카드의 도형과 특수 효과를 표시하는 이름을 반환한다.</summary>
     private string CardName(SpellGame.Card card)
     {
+        string cursePrefix = _game.IsCursed(card) ? "[저주] " : "";
         if (card.Glued != null)
         {
             string effects = "";
@@ -868,11 +884,11 @@ public sealed class SpellGameUI : MonoBehaviour
             if (guard > 0) effects += $"수호 +{guard * 3} ";
             if (resonance > 0) effects += $"공명 +{resonance} ";
             if (SpellGame.EffectCount(card, SpellGame.Effect.Afterimage) > 0) effects += card.HasPersisted ? "잔상 사용됨" : "잔상";
-            return "접착 조각\n" + (effects.Length == 0 ? "일반 · 배치 1회" : effects);
+            return cursePrefix + "접착 조각\n" + (effects.Length == 0 ? "일반 · 배치 1회" : effects);
         }
         string shape = card.Shape == SpellGame.Shape.Square ? "정사각형" : card.Shape == SpellGame.Shape.Triangle ? "반칸 삼각형" : card.Shape == SpellGame.Shape.QuarterTriangle ? "1/4 삼각형" : "직사각형";
         string effect = card.Effect == SpellGame.Effect.Flame ? "불꽃 · 공격 피해 +2" : card.Effect == SpellGame.Effect.Guard ? "수호 · 방어 +3" : card.Effect == SpellGame.Effect.Resonance ? "공명 · 3칸 이상 배치 +1" : card.Effect == SpellGame.Effect.Afterimage ? card.HasPersisted ? "잔상 · 다음 시전 후 버림" : "잔상 · 시전 후 1회 유지" : "일반 · 추가 효과 없음";
-        return shape + "\n" + effect;
+        return cursePrefix + shape + "\n" + effect;
     }
 
     /// <summary>카드 효과와 선택 여부를 나타내는 색을 반환한다.</summary>
@@ -1051,7 +1067,7 @@ public sealed class SpellGameUI : MonoBehaviour
         _dragGhost.pivot = new Vector2(0.5f, 0.5f);
         _dragGhost.gameObject.AddComponent<CanvasRenderer>();
         SpellShapeGraphic icon = _dragGhost.gameObject.AddComponent<SpellShapeGraphic>();
-        icon.raycastTarget = false; icon.SetCard(card, rotation);
+        icon.raycastTarget = false; icon.SetCard(card, rotation, _game.IsCursed(card));
         MoveCardDrag(position);
     }
 
@@ -1246,7 +1262,7 @@ public sealed class SpellGameUI : MonoBehaviour
         Label(_hammerOverlay, _hammerPhase == HammerPhase.Selecting ? "조각을 클릭하거나 작업대로 드래그하세요" : "Space: 타격   ·   Esc: 타격 전 취소", 260, 550, 600, 32, 19);
 
         _hammerSource = _hammerCard == null ? null : HammerShape(_hammerOverlay, _hammerCard.Shape, 560, 340, 144);
-        if (_hammerSource != null) _hammerSource.GetComponent<SpellShapeGraphic>().SetCard(_hammerCard);
+        if (_hammerSource != null) _hammerSource.GetComponent<SpellShapeGraphic>().SetCard(_hammerCard, isCursed: _game.IsCursed(_hammerCard));
         Panel(_hammerOverlay, 886, 181, 66, 278, new Color(0.40f, 0.34f, 0.27f));
         HammerBand(0, 0.25f, new Color(0.28f, 0.30f, 0.33f));
         HammerBand(0.25f, 0.5f, new Color(0.25f, 0.54f, 0.45f));
@@ -1291,7 +1307,7 @@ public sealed class SpellGameUI : MonoBehaviour
                 UnityEngine.UI.Navigation navigation = button.navigation; navigation.mode = UnityEngine.UI.Navigation.Mode.None; button.navigation = navigation;
                 button.onClick.AddListener(() => SelectHammerCard(card));
                 panel.gameObject.AddComponent<SpellCardDrag>().Setup(this, card);
-                HammerShape(panel, card.Shape, 74, 32, 54).GetComponent<SpellShapeGraphic>().SetCard(card);
+                HammerShape(panel, card.Shape, 74, 32, 54).GetComponent<SpellShapeGraphic>().SetCard(card, isCursed: _game.IsCursed(card));
                 Label(panel, CardName(card), 2, 65, 144, 48, 12);
             }
         }
@@ -1426,6 +1442,9 @@ public sealed class SpellGameUI : MonoBehaviour
     /// <summary>접착 미리 보기의 지정 원본 카드를 반환한다.</summary>
     public SpellGame.Card GlueCard(int index) { return _glueCards[index]; }
 
+    /// <summary>지정 접착 작업 조각이 현재 미해결 저주 대상인지 반환한다.</summary>
+    public bool IsGluePartCursed(int index) { return _game.IsCursed(_glueCards[index]); }
+
     /// <summary>작업 공간에서 지정 조각의 스냅 좌표를 반환한다.</summary>
     public Vector2Int GluePosition(int index) { return _gluePositions[index]; }
 
@@ -1509,7 +1528,7 @@ public sealed class SpellGameUI : MonoBehaviour
         {
             _glueDragRotation = (_glueDragRotation + 1) % 4;
             _dragGhost.sizeDelta = new Vector2(72 * SpellGame.ShapeWidth(_glueDragCard, _glueDragRotation), 72 * SpellGame.ShapeHeight(_glueDragCard, _glueDragRotation));
-            _dragGhost.GetComponent<SpellShapeGraphic>().SetCard(_glueDragCard, _glueDragRotation);
+            _dragGhost.GetComponent<SpellShapeGraphic>().SetCard(_glueDragCard, _glueDragRotation, _game.IsCursed(_glueDragCard));
             return;
         }
         int part = _glueGraphic.IsDragging ? _glueGraphic.DragPart : _glueSelected;
@@ -1558,7 +1577,7 @@ public sealed class SpellGameUI : MonoBehaviour
             button.gameObject.AddComponent<SpellCardDrag>().Setup(this, card);
             RectTransform iconRect = Element("Glue Hand Shape", (RectTransform)button.transform, 5, 3, 145, 64);
             iconRect.gameObject.AddComponent<CanvasRenderer>();
-            SpellShapeGraphic icon = iconRect.gameObject.AddComponent<SpellShapeGraphic>(); icon.SetCard(card); icon.raycastTarget = false;
+            SpellShapeGraphic icon = iconRect.gameObject.AddComponent<SpellShapeGraphic>(); icon.SetCard(card, isCursed: _game.IsCursed(card)); icon.raycastTarget = false;
             Label((RectTransform)button.transform, CardName(card), 3, 70, 149, 45, 13);
         }
         RefreshGlue();

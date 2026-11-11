@@ -9,10 +9,30 @@ public sealed class SpellGame
     private const int MAX_HAND_SIZE = 7;
     private const float MAX_DECOMPOSITION_CHANCE = 0.9f;
     private const int GLUE_USES_PER_TURN = 1;
+    private const int CURSE_INTERVAL_TURNS = 1;
+    private const int CURSE_FAILURE_AMOUNT = 10;
 
     public enum Shape { Square, Triangle, Rectangle, QuarterTriangle }
     public enum Effect { None, Flame, Guard, Resonance, Afterimage }
     public enum Phase { Title, Combat, Reward, Victory, Defeat }
+    public enum CurseFailureEffect { HPDamage }
+    public enum CurseResolution { None, Spell, Hammer }
+
+    public sealed class CardCurse
+    {
+        public Card Target { get; internal set; }
+        public int AppliedTurn { get; }
+        public CurseResolution Resolution { get; internal set; }
+        public CurseFailureEffect FailureEffect { get; }
+        public int Amount { get; }
+        public bool IsResolved { get { return Resolution != CurseResolution.None; } }
+
+        /// <summary>대상 인스턴스와 적용 턴, 실패 효과 종류 및 수치를 저주 상태로 보관한다.</summary>
+        internal CardCurse(Card target, int turn, CurseFailureEffect effect, int amount)
+        {
+            Target = target; AppliedTurn = turn; FailureEffect = effect; Amount = amount;
+        }
+    }
 
     public sealed class Card
     {
@@ -97,16 +117,17 @@ public sealed class SpellGame
         public int MaxHealth { get; internal set; }
         public bool IsSealer { get; }
         public bool IsThief { get; }
+        public bool IsCurser { get; }
         public int SealedSpell { get; internal set; } = -1;
         internal int PreviousSealedSpell { get; set; } = -1;
 
         public int Intent { get { return _pattern[ActionCount % _pattern.Length]; } }
         internal int ActionCount;
 
-        /// <summary>이름, 체력, 공격 패턴과 봉인자·도둑손 여부로 적의 전투 상태를 초기화한다.</summary>
-        internal Enemy(string name, int health, int[] pattern, bool isSealer = false, bool isThief = false)
+        /// <summary>이름, 체력, 공격 패턴과 신규 적 능력 여부로 적의 전투 상태를 초기화한다.</summary>
+        internal Enemy(string name, int health, int[] pattern, bool isSealer = false, bool isThief = false, bool isCurser = false)
         {
-            Name = name; Health = health; MaxHealth = health; _pattern = pattern; IsSealer = isSealer; IsThief = isThief;
+            Name = name; Health = health; MaxHealth = health; _pattern = pattern; IsSealer = isSealer; IsThief = isThief; IsCurser = isCurser;
         }
     }
 
@@ -122,10 +143,13 @@ public sealed class SpellGame
     private readonly Board[] _boards = { new Board(0), new Board(1), new Board(2), new Board(3) };
     private bool _hasSealerEncounter;
     private bool _hasThiefEncounter;
+    private bool _hasCurserEncounter;
     private readonly List<Card> _stolen = new List<Card>();
     private Enemy _theftOwner;
 
     public Card TheftTarget { get; private set; }
+    public CardCurse Curse { get; private set; }
+    public int LastCurseDamage { get; private set; }
     public int StolenCount { get { return _stolen.Count; } }
     public bool HasLivingThief
     {
@@ -157,10 +181,11 @@ public sealed class SpellGame
     }
 
     /// <summary>체력·카드·도안을 초기화하고 선택한 신규 적 포함 여부로 첫 전투를 시작한다.</summary>
-    public void StartGame(bool withSealer = false, bool withThief = false)
+    public void StartGame(bool withSealer = false, bool withThief = false, bool withCurser = false)
     {
         _hasSealerEncounter = withSealer;
         _hasThiefEncounter = withThief;
+        _hasCurserEncounter = withCurser;
         _owned.Clear(); _spells.Clear(); _nextId = 0; Health = 50; Battle = 0;
         _spells.Add(0); _spells.Add(1);
         for (int i = 0; i < 4; i++) AddCard(Shape.Square, Effect.None);
@@ -182,6 +207,7 @@ public sealed class SpellGame
     /// <summary>다음 전투의 적과 덱을 준비하고 첫 턴을 시작한다.</summary>
     private void StartBattle()
     {
+        Curse = null; LastCurseDamage = 0;
         CancelTheft(); _stolen.Clear();
         Battle++; Turn = 0; Block = 0; Target = 0; _enemies.Clear(); _hand.Clear(); _discard.Clear(); _draw.Clear();
         foreach (Board board in Boards) board.MutablePieces.Clear();
@@ -196,6 +222,7 @@ public sealed class SpellGame
         if (Battle == 6) AddEnemy(2);
         if (_hasSealerEncounter && Battle == 1) _enemies.Add(new Enemy("형상 봉인자", 12, new[] { 4 }, true));
         if (_hasThiefEncounter && Battle == 1) _enemies.Add(new Enemy("도둑손", 12, new[] { 4 }, false, true));
+        if (_hasCurserEncounter && Battle == 1) _enemies.Add(new Enemy("조각 저주술사", 12, new[] { 4 }, false, false, true));
         CurrentPhase = Phase.Combat; StartTurn();
         RefreshSeals();
     }
@@ -222,8 +249,50 @@ public sealed class SpellGame
         }
     }
 
-    /// <summary>새 턴에 배치 횟수를 갱신하고 카드를 뽑는다.</summary>
-    private void StartTurn() { Turn++; PlacementsLeft = 3; HammerUsesLeft = HAMMER_USES_PER_TURN; GlueUsesLeft = GLUE_USES_PER_TURN; Draw(5); }
+    /// <summary>새 턴의 사용 횟수와 손패를 준비한 뒤 생존 저주술사의 대상 한 장을 지정한다.</summary>
+    private void StartTurn()
+    {
+        Turn++; PlacementsLeft = 3; HammerUsesLeft = HAMMER_USES_PER_TURN; GlueUsesLeft = GLUE_USES_PER_TURN; Draw(5);
+        ApplyCardCurse();
+    }
+
+    /// <summary>설정된 턴 간격에 생존 저주술사가 있으면 실제 손패에서 균등 무작위로 한 장만 저주한다.</summary>
+    private void ApplyCardCurse()
+    {
+        if (Curse != null && Curse.AppliedTurn == Turn) return;
+        Curse = null;
+        if (Hand.Count == 0 || (Turn - 1) % CURSE_INTERVAL_TURNS != 0) return;
+        foreach (Enemy enemy in Enemies)
+        {
+            if (!enemy.IsCurser || enemy.Health <= 0) continue;
+            Curse = new CardCurse(Hand[_random.Next(Hand.Count)], Turn, CurseFailureEffect.HPDamage, CURSE_FAILURE_AMOUNT);
+            return;
+        }
+    }
+
+    /// <summary>지정 카드 인스턴스가 이번 턴의 미해결 저주 대상인지 반환한다.</summary>
+    public bool IsCursed(Card card)
+    {
+        return card != null && Curse != null && Curse.AppliedTurn == Turn && !Curse.IsResolved && Curse.Target == card;
+    }
+
+    /// <summary>현재 저주 대상의 성공한 시전 또는 실제 분해를 기록한다. 다른 카드에는 영향을 주지 않는다.</summary>
+    private void ResolveCurse(Card card, CurseResolution resolution)
+    {
+        if (IsCursed(card)) Curse.Resolution = resolution;
+    }
+
+    /// <summary>미해결 저주의 실패 효과 정보를 적용하고 실제 HP 감소량을 기록한다. HP 피해는 방어를 소비하지 않는다.</summary>
+    private void ApplyCurseFailure(CardCurse curse)
+    {
+        switch (curse.FailureEffect)
+        {
+            case CurseFailureEffect.HPDamage:
+                LastCurseDamage = Math.Min(Health, curse.Amount);
+                Health -= LastCurseDamage;
+                break;
+        }
+    }
 
     /// <summary>손패 카드의 망치 대상 조건과 한 단계 분해 공간을 확인해 거부 사유를 반환한다.</summary>
     public string HammerIssue(Card card)
@@ -293,7 +362,7 @@ public sealed class SpellGame
         return shape == Shape.Rectangle ? 8 : shape == Shape.Square ? 4 : shape == Shape.Triangle ? 2 : 1;
     }
 
-    /// <summary>공통 도형 분해 결과로 전투 손패를 교체하고 망치 횟수를 소비한다. 무효 대상은 변경하지 않는다.</summary>
+    /// <summary>강도에 따른 분해 결과로 손패를 교체하고 망치 횟수를 소비한다. 실제 교체된 대상의 저주만 해제한다.</summary>
     public bool TryHammer(Card card, float strength, out Shape[] resultShapes)
     {
         resultShapes = Array.Empty<Shape>();
@@ -322,6 +391,7 @@ public sealed class SpellGame
         int index = _hand.IndexOf(card);
         _hand.RemoveAt(index);
         _hand.InsertRange(index, results);
+        ResolveCurse(card, CurseResolution.Hammer);
         return true;
     }
 
@@ -389,7 +459,7 @@ public sealed class SpellGame
         return touching ? null : "실제 도형의 변을 맞대세요. 꼭짓점만 닿으면 접착할 수 없습니다";
     }
 
-    /// <summary>확인 시 원본과 접촉을 재검증한 뒤 일반 카드 두 장을 전투 한정 복합 카드 한 장으로 교체한다.</summary>
+    /// <summary>두 손패 카드의 접촉을 재검증해 복합 카드로 교체하고 미해결 저주를 결과 인스턴스로 이전한다.</summary>
     public bool TryGlue(Card first, int firstRotation, Card second, int secondRotation, int relativeX, int relativeY)
     {
         if (GlueIssue(first, firstRotation, second, secondRotation, relativeX, relativeY) != null) return false;
@@ -398,12 +468,14 @@ public sealed class SpellGame
             HasPersisted = (EffectCount(first, Effect.Afterimage) > 0 && first.HasPersisted) || (EffectCount(second, Effect.Afterimage) > 0 && second.HasPersisted) };
         int index = Math.Min(_hand.IndexOf(first), _hand.IndexOf(second));
         _hand.Remove(first); _hand.Remove(second); _hand.Insert(index, result);
+        if (IsCursed(first) || IsCursed(second)) Curse.Target = result;
         _nextId++; GlueUsesLeft--; return true;
     }
 
     /// <summary>전투 임시 카드와 배치를 정리하고 보상 카드를 포함한 소유 덱을 복구해 지정 화면으로 전환한다.</summary>
     private void FinishCombat(Phase phase)
     {
+        Curse = null;
         CancelTheft(); _stolen.Clear();
         foreach (Enemy enemy in Enemies) { enemy.SealedSpell = -1; enemy.PreviousSealedSpell = -1; }
         SealNotice = "";
@@ -433,10 +505,15 @@ public sealed class SpellGame
         _discard.Add(card);
     }
 
-    /// <summary>손패를 버리고 생존 적의 공격을 순서대로 처리한다.</summary>
+    /// <summary>현재 턴 저주를 판정·정리하고 생존 시 손패 버림과 기존 적 공격을 순서대로 처리한다.</summary>
     public void EndTurn()
     {
         if (CurrentPhase != Phase.Combat) return;
+        LastCurseDamage = 0;
+        CardCurse endingCurse = Curse;
+        Curse = null;
+        if (endingCurse != null && endingCurse.AppliedTurn == Turn && !endingCurse.IsResolved) ApplyCurseFailure(endingCurse);
+        if (Health <= 0) { Health = 0; FinishCombat(Phase.Defeat); return; }
         SealNotice = "";
         foreach (Card card in Hand) Discard(card);
         _hand.Clear();
@@ -689,6 +766,7 @@ public sealed class SpellGame
         for (int i = board.Pieces.Count - 1; i >= 0; i--)
         {
             Placement piece = board.Pieces[i];
+            ResolveCurse(piece.Card, CurseResolution.Spell);
             piece.CanRefund = false;
             if (EffectCount(piece.Card, Effect.Afterimage) > 0 && !piece.HasPersisted) piece.Card.HasPersisted = true;
             else { Discard(piece.Card); board.MutablePieces.RemoveAt(i); }

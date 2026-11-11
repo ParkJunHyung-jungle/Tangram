@@ -58,10 +58,19 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
                 {
                     if ((CellMask(p.Card, p.X, p.Y, p.Rotation, lx, ly) & (1 << sector)) == 0) continue;
                     color = SpellGame.EffectCount(p.Card, SpellGame.Effect.Flame) > 0 ? new Color(0.85f, 0.42f, 0.2f) : SpellGame.EffectCount(p.Card, SpellGame.Effect.Guard) > 0 ? new Color(0.28f, 0.55f, 0.8f) : SpellGame.EffectCount(p.Card, SpellGame.Effect.Resonance) > 0 ? new Color(0.65f, 0.40f, 0.8f) : SpellGame.EffectCount(p.Card, SpellGame.Effect.Afterimage) > 0 ? p.HasPersisted ? new Color(0.18f, 0.43f, 0.41f) : new Color(0.31f, 0.76f, 0.68f) : new Color(0.68f, 0.73f, 0.75f);
+                    if (_game.IsCursed(p.Card)) color = Color.red;
                 }
                 if (preview && board == hoverBoard && (CellMask(_ui.SelectedCard, hoverLocalX, hoverLocalY, _ui.Rotation, lx, ly) & (1 << sector)) != 0) color = valid ? new Color(0.55f, 0.87f, 0.66f) : new Color(0.9f, 0.3f, 0.3f);
                 int start = vh.currentVertCount; UIVertex v = UIVertex.simpleVert; v.color = color;
                 v.position = center; vh.AddVert(v); v.position = corners[sector]; vh.AddVert(v); v.position = corners[(sector + 1) % 4]; vh.AddVert(v); vh.AddTriangle(start, start + 1, start + 2);
+                if (active) foreach (SpellGame.Placement piece in _game.Boards[board].Pieces)
+                {
+                    if (!_game.IsCursed(piece.Card) || (CellMask(piece.Card, piece.X, piece.Y, piece.Rotation, lx, ly) & (1 << sector)) == 0) continue;
+                    Color curseColor = Color.red;
+                    Line(vh, center, corners[sector], 4, curseColor);
+                    Line(vh, corners[sector], corners[(sector + 1) % 4], 4, curseColor);
+                    Line(vh, corners[(sector + 1) % 4], center, 4, curseColor);
+                }
             }
             for (int side = 0; side < 4; side++) Line(vh, center, corners[side], 1.2f, new Color(0.08f, 0.11f, 0.14f, 0.75f));
             if (!active) continue;
