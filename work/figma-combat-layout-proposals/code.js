@@ -969,7 +969,65 @@ async function mainKits() {
   return root;
 }
 
+// ================= 키트 1 스프라이트 시트 =================
+// PRD §16.6 목록을 이름과 크기를 맞춘 프레임으로 만들고, 각 프레임에 2배 PNG 내보내기 설정을 넣는다.
+const SPRITE_ROOT_NAME = '스프라이트 시트 · 키트 1 (자동 생성)';
+const GOLD = '#D6B46E', WHITE = '#FFFFFF';
+const SPRITES = [
+  { name: 'ui_round_8', w: 32, h: 32, note: '흰 바탕 · 테두리 8', draw: f => rect(f, '모양', 0, 0, 32, 32, WHITE, { r: 8 }) },
+  { name: 'ui_round_14', w: 48, h: 48, note: '흰 바탕 · 테두리 14', draw: f => rect(f, '모양', 0, 0, 48, 48, WHITE, { r: 14 }) },
+  { name: 'ui_pill', w: 48, h: 48, note: '흰 알약 · 테두리 22', draw: f => rect(f, '모양', 0, 0, 48, 48, WHITE, { r: 24 }) },
+  { name: 'ui_ring_8', w: 32, h: 32, note: '흰 링 2px · 테두리 8', draw: f => rect(f, '모양', 0, 0, 32, 32, null, { r: 8, stroke: WHITE, sw: 2 }) },
+  { name: 'ui_ring_14', w: 48, h: 48, note: '흰 링 1px · 테두리 14', draw: f => rect(f, '모양', 0, 0, 48, 48, null, { r: 14, stroke: WHITE, sw: 1 }) },
+  { name: 'ui_ring_14_2', w: 48, h: 48, note: '흰 링 2px · 테두리 14', draw: f => rect(f, '모양', 0, 0, 48, 48, null, { r: 14, stroke: WHITE, sw: 2 }) },
+  { name: 'ui_ring_pill', w: 48, h: 48, note: '흰 알약 링 2px · 테두리 22', draw: f => rect(f, '모양', 0, 0, 48, 48, null, { r: 24, stroke: WHITE, sw: 2 }) },
+  { name: 'ui_frame_gold', w: 96, h: 96, note: '안쪽 금선 · 테두리 28', draw: f => rect(f, '모양', 8, 8, 80, 80, null, { r: 6, stroke: GOLD, strokeOpacity: 0.35, sw: 1 }) },
+  { name: 'ui_frame_hairline', w: 48, h: 48, note: '안쪽 금선 · 테두리 12', draw: f => rect(f, '모양', 5, 5, 38, 38, null, { r: 9, stroke: GOLD, strokeOpacity: 0.7, sw: 1 }) },
+  { name: 'ui_pip_full', w: 24, h: 24, note: '채운 마름모', draw: f => poly(f, '모양', [[12, 1], [23, 12], [12, 23], [1, 12]], WHITE) },
+  { name: 'ui_pip_empty', w: 24, h: 24, note: '마름모 외곽선', draw: f => poly(f, '모양', [[12, 2], [22, 12], [12, 22], [2, 12]], null, { stroke: WHITE, sw: 2 }) },
+  { name: 'ui_icon_sword', w: 32, h: 32, note: '공격 의도', draw: f => sword(f, 0, 0, 32, WHITE) },
+  { name: 'ui_icon_shield', w: 32, h: 32, note: '방어', draw: f => shield(f, 2, 0, 28, WHITE) },
+  { name: 'ui_icon_play', w: 32, h: 32, note: '시전', draw: f => poly(f, '모양', [[8, 5], [27, 16], [8, 27]], WHITE) },
+  { name: 'ui_icon_grip', w: 32, h: 32, note: '이동 핸들', draw: f => { for (let r = 0; r < 3; r++) for (let c = 0; c < 2; c++) ellipse(f, '점', 10 + c * 8, 6 + r * 8, 5, 5, WHITE); } },
+  { name: 'ui_icon_flame', w: 24, h: 24, note: '불꽃', draw: f => fxIcon(f, 'flame', 2, 2, 20, WHITE) },
+  { name: 'ui_icon_guard', w: 24, h: 24, note: '수호', draw: f => fxIcon(f, 'guard', 2, 2, 20, WHITE) },
+  { name: 'ui_icon_resonance', w: 24, h: 24, note: '공명', draw: f => fxIcon(f, 'resonance', 2, 2, 20, WHITE) },
+  { name: 'ui_icon_afterimage', w: 24, h: 24, note: '잔상', draw: f => fxIcon(f, 'afterimage', 2, 2, 20, WHITE) },
+];
+
+async function mainSprites() {
+  const target = await figma.getNodeByIdAsync(TARGET_ID);
+  if (!target) throw new Error('Frame 34(213:420)를 찾지 못했습니다');
+  let page = target; while (page && page.type !== 'PAGE') page = page.parent;
+  await figma.setCurrentPageAsync(page);
+  await figma.loadFontAsync({ family: BASE_FONT, style: 'Regular' });
+  await figma.loadFontAsync({ family: BASE_FONT, style: 'Bold' });
+  C = { ...BASE }; FONT = BASE_FONT; HEAD = BASE_FONT; DECOR = null; KIT = null;
+  for (const old of page.children.filter(n => n.name === SPRITE_ROOT_NAME)) old.remove();
+  let right = 0;
+  for (const n of page.children) right = Math.max(right, n.x + n.width);
+  let anchor = target; while (anchor.parent && anchor.parent.type !== 'PAGE') anchor = anchor.parent;
+  const cols = 5, cellW = 200, cellH = 190, pad = 64;
+  const rows = Math.ceil(SPRITES.length / cols);
+  const sheet = frame(page, SPRITE_ROOT_NAME, right + 400, anchor.y, pad * 2 + cols * cellW, pad * 2 + 90 + rows * cellH, '#3A3F4A', { r: 24 });
+  txt(sheet, '제목', pad, pad - 24, 0, '키트 1 스프라이트 · 각 프레임을 선택해 내보내기(PNG 2배)', 22, { bold: true });
+  txt(sheet, '안내', pad, pad + 14, cols * cellW, 'Unity: Sprite(2D and UI), Pixels Per Unit 200, 메모의 테두리 값을 Sprite Editor의 Border(1배 px ×2)로 입력', 14, { color: C.sub });
+  SPRITES.forEach((sp, i) => {
+    const x = pad + (i % cols) * cellW, y = pad + 90 + Math.floor(i / cols) * cellH;
+    rect(sheet, '자리 표시', x, y, 128, 128, '#2A2E37', { r: 8 });
+    const f = frame(sheet, sp.name, x + (128 - sp.w) / 2, y + (128 - sp.h) / 2, sp.w, sp.h, null, { clip: true });
+    sp.draw(f);
+    f.exportSettings = [{ format: 'PNG', suffix: '', contentsOnly: true, constraint: { type: 'SCALE', value: 2 } }];
+    txt(sheet, '파일 이름', x, y + 136, cellW - 16, `${sp.name}.png`, 13, { bold: true });
+    txt(sheet, '메모', x, y + 156, cellW - 16, `${sp.w}×${sp.h} · ${sp.note}`, 11, { color: C.sub });
+  });
+  figma.viewport.scrollAndZoomIntoView([sheet]);
+  return sheet;
+}
+
 const COMMAND = figma.command || 'layouts';
-(COMMAND === 'kits' ? mainKits() : mainLayouts())
-  .then(() => figma.closePlugin(COMMAND === 'kits' ? '판타지 UI 키트 3안을 Frame 34 오른쪽에 만들었습니다' : '전투 UI 레이아웃 수정안 3개를 Frame 34에 만들었습니다'))
+const RUNNERS = { layouts: mainLayouts, kits: mainKits, sprites: mainSprites };
+const DONE = { layouts: '전투 UI 레이아웃 수정안 3개를 Frame 34에 만들었습니다', kits: '판타지 UI 키트 3안을 Frame 34 오른쪽에 만들었습니다', sprites: '키트 1 스프라이트 시트를 만들었습니다' };
+(RUNNERS[COMMAND] || mainLayouts)()
+  .then(() => figma.closePlugin(DONE[COMMAND] || DONE.layouts))
   .catch(e => figma.closePlugin('오류: ' + e.message));

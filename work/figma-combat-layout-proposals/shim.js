@@ -148,6 +148,8 @@
     if (!target) { stage.textContent = '노드를 찾지 못했습니다: ' + (v || name); stage.style.color = '#fff'; return; }
     const copy = Object.assign(Object.create(Object.getPrototypeOf(target)), target);
     copy.x = 0; copy.y = 0;
+    // bg=none이면 스프라이트 내보내기용으로 배경을 투명하게 둔다.
+    if (params.get('bg') === 'none') { document.body.style.background = 'transparent'; document.documentElement.style.background = 'transparent'; }
     const scale = parseFloat(params.get('scale') || '1');
     stage.style.transform = `scale(${scale})`; stage.style.transformOrigin = '0 0';
     draw(copy, stage);
