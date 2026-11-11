@@ -4,12 +4,33 @@ using UnityEngine.UI;
 /// <summary>체력 막대의 현재 비율, 예상 피해 구간, 수치 문구를 표시한다.</summary>
 public sealed class SpellHpBarView : MonoBehaviour
 {
+    private const float PULSE_SPEED = 5f;
+    private const float PULSE_MIN_ALPHA = 0.25f;
+
     [Header("구성")]
     [SerializeField] private RectTransform _fill;
     [SerializeField] private RectTransform _preview;
     [SerializeField] private Text _value;
 
+    [Header("예상 피해 깜빡임")]
+    [SerializeField] private bool _isPreviewPulsing;
+    [SerializeField] private Color _pulseColor = new Color(0.937f, 0.32f, 0.3f);
+
     private RectTransform _defenseFill;
+    private Image _previewImage;
+
+    void Awake()
+    {
+        _previewImage = _preview.GetComponent<Image>();
+    }
+
+    void Update()
+    {
+        if (!_isPreviewPulsing || !_preview.gameObject.activeSelf) return;
+        Color color = _pulseColor;
+        color.a = Mathf.Lerp(PULSE_MIN_ALPHA, 1f, (Mathf.Sin(Time.unscaledTime * PULSE_SPEED) + 1f) * 0.5f);
+        _previewImage.color = color;
+    }
 
     /// <summary>체력 막대 위에 방어량을 최대 체력 대비 회색 띠로 표시한다.</summary>
     public void BindDefense(int defense, int maxHealth)

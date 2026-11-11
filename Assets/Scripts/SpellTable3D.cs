@@ -162,7 +162,19 @@ public sealed class SpellTable3D : MonoBehaviour
         _camera.orthographicSize = _cameraSize;
         _boardRoot.position = ViewportOnTable(ViewportCenter(_screen.Board.rectTransform));
         _handRoot.position = ViewportOnTable(ViewportCenter(_screen.HandDropArea));
+        FitHandTray();
         _lastAngle = _cameraAngle; _lastAspect = _camera.aspect;
+    }
+
+    /// <summary>손패 놓기 영역의 화면 범위를 책상면에 투영해 손패 받침의 가로·세로 길이를 맞춘다.</summary>
+    private void FitHandTray()
+    {
+        RectTransform area = _screen.HandDropArea;
+        Vector3 left = ViewportOnTable(ViewportAt(area, new Vector2(0, 0.5f))), right = ViewportOnTable(ViewportAt(area, new Vector2(1, 0.5f)));
+        Vector3 bottom = ViewportOnTable(ViewportAt(area, new Vector2(0.5f, 0))), top = ViewportOnTable(ViewportAt(area, new Vector2(0.5f, 1)));
+        Vector3 size = _handSurface.localScale;
+        size.x = Vector3.Distance(left, right); size.z = Vector3.Distance(bottom, top);
+        _handSurface.localScale = size;
     }
 
     /// <summary>뷰포트 위치의 광선과 수평 책상면의 교점을 반환한다.</summary>
@@ -174,7 +186,13 @@ public sealed class SpellTable3D : MonoBehaviour
     /// <summary>전투 화면 프리팹의 기준 영역 중심을 뷰포트 좌표로 반환한다.</summary>
     private static Vector2 ViewportCenter(RectTransform rect)
     {
-        Vector2 screen = RectTransformUtility.WorldToScreenPoint(null, rect.TransformPoint(rect.rect.center));
+        return ViewportAt(rect, new Vector2(0.5f, 0.5f));
+    }
+
+    /// <summary>영역 안의 정규화 위치(0~1)를 뷰포트 좌표로 반환한다.</summary>
+    private static Vector2 ViewportAt(RectTransform rect, Vector2 normalized)
+    {
+        Vector2 screen = RectTransformUtility.WorldToScreenPoint(null, rect.TransformPoint(Rect.NormalizedToPoint(rect.rect, normalized)));
         return new Vector2(screen.x / Screen.width, screen.y / Screen.height);
     }
 

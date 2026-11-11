@@ -26,7 +26,7 @@ public sealed class SpellGameUI : MonoBehaviour
     private static readonly int[] SPELL_BASE = { 6, 7, 12, 10 };
     private static readonly string[] REWARD_NAMES = { "불꽃 삼각형\n공격 피해 +2", "수호 정사각형\n방어 +3", "공명 직사각형\n3칸 이상: 조각 1장 뽑기", "잔상 1/4 삼각형\n시전 후 1회 유지", "도안: 번개\n단일 피해 12", "도안: 유성\n전체 피해 10" };
     private static readonly IReadOnlyList<Vector2Int>[] PATTERN_CELLS = CreatePatternCells();
-    private static readonly Vector2 MESSAGE_POSITION = new Vector2(880, -480);
+    private static readonly Vector2 MESSAGE_POSITION = new Vector2(705, -480);
     private static readonly Vector2 FEEDBACK_POSITION = new Vector2(960, -100);
     private static readonly Vector2 NORMAL_ENEMY_SIZE = new Vector2(150, 190);
     private static readonly Vector2 LARGE_ENEMY_SIZE = new Vector2(190, 230);
@@ -75,6 +75,8 @@ public sealed class SpellGameUI : MonoBehaviour
     private int _selectedBoard = -1;
     private int _rotation;
     private string _message = "";
+    private string _notice = "";
+    private Color _noticeColor;
     private SpellGame.Phase _renderedPhase = (SpellGame.Phase)(-1);
 
     private string _feedback = "";
@@ -390,7 +392,9 @@ public sealed class SpellGameUI : MonoBehaviour
         screen.Battle.text = $"전투 {_game.Battle}/{BATTLE_COUNT}";
         for (int i = 0; i < screen.ProgressDots.Length; i++)
             screen.ProgressDots[i].color = i < _game.Battle - 1 ? _subColor : i == _game.Battle - 1 ? _textColor : _dimColor;
-        screen.PlayerStatus.Bind(_game.Health, PLAYER_MAX_HEALTH, _game.Block);
+        int incoming = 0;
+        foreach (SpellGame.Enemy enemy in _game.Enemies) if (enemy.Health > 0) incoming += enemy.Intent;
+        screen.PlayerStatus.Bind(_game.Health, PLAYER_MAX_HEALTH, _game.Block, Math.Max(0, incoming - _game.Block));
         screen.Placement.gameObject.SetActive(false);
         screen.BoardCount.gameObject.SetActive(false);
         _boardGraphic.MarkStateDirty();
@@ -407,13 +411,9 @@ public sealed class SpellGameUI : MonoBehaviour
             SpellGame.Card card = _game.Hand[i];
             screen.Hand[i].Bind(this, card, DisplayName(card), EffectText(card), EffectColor(card.Effect), false, card == _selectedCard && _selectedPiece == null, SelectHandCard);
         }
-        int incoming = 0;
-        foreach (SpellGame.Enemy enemy in _game.Enemies) if (enemy.Health > 0) incoming += enemy.Intent;
-        int expected = Math.Max(0, incoming - _game.Block);
-        screen.Incoming.text = $"적 공격 {incoming}  ·  받을 피해 {expected}";
-        screen.Incoming.color = expected >= _game.Health ? _dangerColor : _subColor;
         screen.EndTurn.SetLabel($"{_game.Turn}턴 종료");
-        if (!string.IsNullOrEmpty(_message)) { screen.Toast.Show(_message, MESSAGE_POSITION, TOAST_SECONDS, _warnColor, true); _message = ""; }
+        if (!string.IsNullOrEmpty(_message)) { screen.Toast.Show(_message, MESSAGE_POSITION, TOAST_SECONDS, _warnColor, true); _message = _notice = ""; }
+        else if (!string.IsNullOrEmpty(_notice)) { screen.Toast.Show(_notice, MESSAGE_POSITION, TOAST_SECONDS, _noticeColor, false); _notice = ""; }
         else if (Time.unscaledTime < _feedbackUntil && _feedbackShownVersion != _feedbackVersion)
         {
             screen.Toast.Show(_feedback, FEEDBACK_POSITION, _feedbackUntil - Time.unscaledTime, _feedbackColor, false);
@@ -1100,7 +1100,7 @@ public sealed class SpellGameUI : MonoBehaviour
     public void SelectPiece(int board, SpellGame.Placement piece)
     {
         if (!_game.CanMovePiece(piece)) { _message = "이전 턴 조각과 시전 후 남은 잔상은 이동할 수 없습니다"; Render(); return; }
-        _pendingCast = -1; _selectedPiece = piece; _selectedCard = piece.Card; _selectedBoard = board; _message = "판을 클릭해 이동하거나 손패로 드래그하세요";
+        _pendingCast = -1; _selectedPiece = piece; _selectedCard = piece.Card; _selectedBoard = board; _message = ""; SetNotice("판을 클릭해 이동하거나 손패로 드래그하세요", _textColor);
         Vector2Int anchor;
         _layout.PieceToGrid(board, piece, out anchor, out _rotation);
         Render();
@@ -1123,7 +1123,7 @@ public sealed class SpellGameUI : MonoBehaviour
         SpellGame.Placement ignored = _selectedBoard == board ? _selectedPiece : null;
         bool completes = CanPreviewGrid(board, anchor) && _game.WouldComplete(board, _selectedCard, x, y, rotation, ignored);
         bool success = _selectedPiece == null ? _game.Place(board, _selectedCard, x, y, rotation) : _game.Move(_selectedBoard, _selectedPiece, board, x, y, rotation);
-        if (success) { ClearSelection(); _message = completes ? $"{SPELL_NAMES[board]} 완성 · 시전 버튼을 누르세요" : ""; } else _message = PlacementIssue(board, anchor) ?? "이 위치에는 놓을 수 없습니다";
+        if (success) { ClearSelection(); _message = ""; if (completes) SetNotice($"{SPELL_NAMES[board]} 완성 · 시전 버튼을 누르세요", PatternColor(board)); } else _message = PlacementIssue(board, anchor) ?? "이 위치에는 놓을 수 없습니다";
         Render();
     }
 
@@ -1148,7 +1148,7 @@ public sealed class SpellGameUI : MonoBehaviour
     /// <summary>포인터가 가리킨 격자 앵커 칸의 배치 가능 상태와 도안 완성 여부를 커서 안내로 쓴다. board가 음수면 기본 안내를 쓴다.</summary>
     public void SetPreviewHint(int board, Vector2Int anchor)
     {
-        string hint = "R · 우클릭 회전   손패에 놓으면 취소";
+        string hint = "R / 우클릭 회전  ·  손패에 놓으면 취소";
         if (board >= 0 && _selectedCard != null)
         {
             int x, y, rotation;
@@ -1159,6 +1159,12 @@ public sealed class SpellGameUI : MonoBehaviour
             hint = complete ? $"놓으면 도안 완성  ·  {Preview(_game.Boards[board], additional)}" : valid ? $"배치 가능  ·  예상 {Preview(_game.Boards[board], additional)}" : PlacementIssue(board, anchor);
         }
         _hintText = hint;
+    }
+
+    /// <summary>경고가 아닌 진행 안내를 다음 화면 갱신 때 지정 강조색의 토스트로 표시하도록 예약한다.</summary>
+    private void SetNotice(string notice, Color color)
+    {
+        _notice = notice; _noticeColor = color;
     }
 
     /// <summary>도안을 들고 있을 때 놓을 수 있는지와 불가 이유를 커서 안내로 쓴다.</summary>
@@ -1223,7 +1229,7 @@ public sealed class SpellGameUI : MonoBehaviour
         bool onHand = RectTransformUtility.RectangleContainsScreenPoint(_combatScreen.HandDropArea, eventData.position, eventData.pressEventCamera);
         if (onHand)
         {
-            if (_game.Recall(_selectedBoard, _selectedPiece)) { ClearSelection(); _message = "조각을 손패로 되돌렸습니다"; }
+            if (_game.Recall(_selectedBoard, _selectedPiece)) { ClearSelection(); _message = ""; SetNotice("조각을 손패로 되돌렸습니다", _textColor); }
             else { ClearSelection(); _message = "손패가 가득 차 회수할 수 없습니다"; }
             Render();
         }
