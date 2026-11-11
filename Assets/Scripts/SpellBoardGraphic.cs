@@ -58,6 +58,9 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
 
     public bool IsDraggingPattern { get { return _dragPattern >= 0; } }
     public float CellSize { get { return _cellSize; } }
+    public int PreviewPatternIndex { get { return _hasPatternPreview ? _dragPattern : -1; } }
+    public Vector2Int PreviewOrigin { get { return _previewOrigin; } }
+    public int PreviewRotation { get { return _dragRotation; } }
 
     /// <summary>표시할 게임 상태와 도안 배치를 설정한다.</summary>
     public void Setup(SpellGameUI ui, SpellGame game, SpellPatternLayout layout)
@@ -233,6 +236,11 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     /// <summary>화면 좌표를 격자 왼쪽 위 기준 픽셀 좌표(x 오른쪽, y 아래)로 바꾼다.</summary>
     private bool ToGridPixels(PointerEventData data, Vector2 position, out Vector2 pixels)
     {
+        if (_ui.IsTableActive)
+        {
+            bool mapped = _ui.TryTableGrid(position, out Vector2 grid);
+            pixels = grid * _cellSize; return mapped;
+        }
         Vector2 p; pixels = Vector2.zero;
         if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rectTransform, position, data.pressEventCamera, out p)) return false;
         Rect rect = rectTransform.rect; pixels = new Vector2(p.x - rect.xMin, rect.yMax - p.y); return true;

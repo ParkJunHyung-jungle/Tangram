@@ -5,13 +5,14 @@ using UnityEngine;
 /// <summary>공유 격자 위 도안의 위치·회전과 1/4 구역 점유를 관리하고, 격자 좌표와 도안 기준 좌표를 서로 변환한다.</summary>
 public sealed class SpellPatternLayout
 {
-    public const int COLUMNS = 6;
+    public const int COLUMNS = 4;
     public const int ROWS = 3;
     private const int PATTERN_COUNT = 4;
     private const int LOCAL_SIZE = 3;
     private const int FULL_MASK = 15;
 
-    private static readonly Vector2Int[] DEFAULT_ORIGINS = { new Vector2Int(0, 0), new Vector2Int(1, 0), new Vector2Int(2, 0), new Vector2Int(4, 0) };
+    private static readonly Vector2Int[] DEFAULT_ORIGINS = { new Vector2Int(0, 0), new Vector2Int(0, 0), new Vector2Int(1, 1), new Vector2Int(2, 0) };
+    private static readonly int[] DEFAULT_ROTATIONS = { 0, 1, 0, 0 };
     private static readonly Vector2Int[] SIDE_OFFSETS = { new Vector2Int(0, -1), new Vector2Int(1, 0), new Vector2Int(0, 1), new Vector2Int(-1, 0) };
 
     private readonly Vector2Int[] _origins = new Vector2Int[PATTERN_COUNT];
@@ -27,7 +28,7 @@ public sealed class SpellPatternLayout
     /// <summary>모든 도안을 기본 위치, 회전 0, 미배치 상태로 되돌린다.</summary>
     public void Reset()
     {
-        for (int i = 0; i < PATTERN_COUNT; i++) { _origins[i] = DEFAULT_ORIGINS[i]; _rotations[i] = 0; _placed[i] = false; }
+        for (int i = 0; i < PATTERN_COUNT; i++) { _origins[i] = DEFAULT_ORIGINS[i]; _rotations[i] = DEFAULT_ROTATIONS[i]; _placed[i] = false; }
     }
 
     /// <summary>도안이 격자에 놓여 있는지 반환한다.</summary>
@@ -134,7 +135,7 @@ public sealed class SpellPatternLayout
         {
             int spell = owned[i];
             if (_placed[spell]) continue;
-            if (MoveIssue(spell, _origins[spell], 0, owned) == null) { Place(spell, _origins[spell], 0); continue; }
+            if (MoveIssue(spell, _origins[spell], _rotations[spell], owned) == null) { Place(spell, _origins[spell], _rotations[spell]); continue; }
             for (int rotation = 0; rotation < 4 && !_placed[spell]; rotation++)
                 for (int y = 0; y < ROWS && !_placed[spell]; y++)
                     for (int x = 0; x < COLUMNS && !_placed[spell]; x++)

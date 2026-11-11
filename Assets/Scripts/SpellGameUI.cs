@@ -17,7 +17,6 @@ public sealed class SpellGameUI : MonoBehaviour
     private const float TAB_HEIGHT = 36f;
     private const int PLAYER_MAX_HEALTH = 50;
     private const int BATTLE_COUNT = 6;
-    private const float ENEMY_BOTTOM = 800f;
     private const float ENEMY_BAR_WIDTH = 320f;
     private const float ENEMY_NARROW_BAR_WIDTH = 280f;
     private const float MENU_GAP = 4f;
@@ -27,12 +26,11 @@ public sealed class SpellGameUI : MonoBehaviour
     private static readonly int[] SPELL_BASE = { 6, 7, 12, 10 };
     private static readonly string[] REWARD_NAMES = { "불꽃 삼각형\n공격 피해 +2", "수호 정사각형\n방어 +3", "공명 직사각형\n3칸 이상: 조각 1장 뽑기", "잔상 1/4 삼각형\n시전 후 1회 유지", "도안: 번개\n단일 피해 12", "도안: 유성\n전체 피해 10" };
     private static readonly IReadOnlyList<Vector2Int>[] PATTERN_CELLS = CreatePatternCells();
-    private static readonly Vector2 MESSAGE_POSITION = new Vector2(550, -850);
-    private static readonly Vector2 FEEDBACK_POSITION = new Vector2(1400, -140);
-    private static readonly float[][] ENEMY_X = { new[] { 1400f }, new[] { 1180f, 1620f }, new[] { 1080f, 1400f, 1720f } };
+    private static readonly Vector2 MESSAGE_POSITION = new Vector2(880, -480);
+    private static readonly Vector2 FEEDBACK_POSITION = new Vector2(960, -100);
     private static readonly Vector2 NORMAL_ENEMY_SIZE = new Vector2(150, 190);
     private static readonly Vector2 LARGE_ENEMY_SIZE = new Vector2(190, 230);
-    private static readonly Vector2 BOSS_SIZE = new Vector2(300, 380);
+    private static readonly Vector2 BOSS_SIZE = new Vector2(210, 245);
 
     [Header("화면 연결")]
     [SerializeField] private GameObject _canvas;
@@ -44,6 +42,8 @@ public sealed class SpellGameUI : MonoBehaviour
     [SerializeField] private SpellPauseMenu _pauseMenu;
     [SerializeField] private SpellHelpPanel _helpPanel;
     [SerializeField] private SpellPileViewer _pileViewer;
+    [SerializeField] private SpellTable3D _table;
+    [SerializeField] private GameObject _background;
 
     [Header("상태 색")]
     [SerializeField] private Color[] _patternColors = { new Color(0.957f, 0.788f, 0.365f), new Color(0.902f, 0.922f, 0.941f), new Color(0.725f, 0.89f, 0.42f), new Color(0.949f, 0.553f, 0.698f) };
@@ -65,6 +65,7 @@ public sealed class SpellGameUI : MonoBehaviour
     private RectTransform _root;
     private Font _font;
     private SpellBoardGraphic _boardGraphic;
+    private Vector2[] _enemyPositions;
     private RectTransform _dragGhost;
     private RectTransform _aimElbow;
     private string _hintText = "";
@@ -105,6 +106,7 @@ public sealed class SpellGameUI : MonoBehaviour
 
     public SpellGame.Card SelectedCard { get { return _selectedCard; } }
     public int Rotation { get { return _rotation; } }
+    public bool IsTableActive { get { return _table != null; } }
     public bool CanInteract { get { return isActiveAndEnabled && !_showPauseMenu && !_showHelp && _openPile < 0 && _game.CurrentPhase == SpellGame.Phase.Combat; } }
 
     /// <summary>논리 도안 마스크에서 점유 칸 좌표를 한 번 생성해 읽기 전용 목록으로 반환한다.</summary>
@@ -133,6 +135,7 @@ public sealed class SpellGameUI : MonoBehaviour
         _boardGraphic = _combatScreen.Board;
         _boardGraphic.Setup(this, _game, _layout);
         SetupCombatScreen();
+        _table.Setup(this, _game, _layout, _combatScreen);
         SetupOtherScreens();
         SetupOverlays();
         Render();
@@ -154,6 +157,7 @@ public sealed class SpellGameUI : MonoBehaviour
         _castDragging = false;
         if (_boardGraphic != null) _boardGraphic.CancelDrag();
         HideDragGhost();
+        if (_table != null) _table.SetVisible(false);
         if (_canvas != null) _canvas.SetActive(false);
     }
 
@@ -172,6 +176,7 @@ public sealed class SpellGameUI : MonoBehaviour
         }
         if (_showPauseMenu || _openPile >= 0 || _showHelp) return;
         if (_game.CurrentPhase != SpellGame.Phase.Combat) return;
+        if (_table.IsDragging) return;
         bool rotate = Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame;
         bool rightClick = Mouse.current != null && Mouse.current.rightButton.wasPressedThisFrame;
         if (!rotate && !rightClick) return;
@@ -200,6 +205,8 @@ public sealed class SpellGameUI : MonoBehaviour
     private void SetupCombatScreen()
     {
         SpellCombatScreen screen = _combatScreen;
+        _enemyPositions = new Vector2[screen.Enemies.Length];
+        for (int i = 0; i < screen.Enemies.Length; i++) _enemyPositions[i] = ((RectTransform)screen.Enemies[i].transform).anchoredPosition;
         screen.Help.SetAction(() => { if (!CanInteract) return; _showHelp = true; Render(); });
         screen.Menu.SetAction(() => { OpenPauseState(); Render(); });
         screen.DrawPile.Setup("드로우 덱", () => OpenPile(0));
@@ -309,8 +316,10 @@ public sealed class SpellGameUI : MonoBehaviour
         _combatScreen.MoreMenu.Close();
         SpellGame.Phase phase = _game.CurrentPhase;
         bool combat = phase == SpellGame.Phase.Combat;
+        _background.SetActive(!combat);
         bool result = phase == SpellGame.Phase.Victory || phase == SpellGame.Phase.Defeat;
         _combatScreen.gameObject.SetActive(combat);
+        _table.SetVisible(combat);
         _titleScreen.gameObject.SetActive(phase == SpellGame.Phase.Title);
         _rewardScreen.gameObject.SetActive(phase == SpellGame.Phase.Reward);
         _resultScreen.gameObject.SetActive(result);
@@ -392,7 +401,7 @@ public sealed class SpellGameUI : MonoBehaviour
         screen.DiscardPile.Bind(_game.DiscardCount);
         for (int i = 0; i < screen.Hand.Length; i++)
         {
-            bool has = i < _game.Hand.Count;
+            bool has = !IsTableActive && i < _game.Hand.Count;
             screen.Hand[i].gameObject.SetActive(has);
             if (!has) continue;
             SpellGame.Card card = _game.Hand[i];
@@ -411,6 +420,19 @@ public sealed class SpellGameUI : MonoBehaviour
             _feedbackShownVersion = _feedbackVersion;
         }
         SetPreviewHint(-1, Vector2Int.zero);
+        _table.Sync();
+    }
+
+    /// <summary>3D 판에서 모델 배치가 바뀌면 기존 선택과 화면 상태를 갱신한다.</summary>
+    public void TableChanged()
+    {
+        ClearSelection(); Render();
+    }
+
+    /// <summary>3D 판 위 화면 위치를 소수 격자 좌표로 바꾸고 교차 여부를 반환한다.</summary>
+    public bool TryTableGrid(Vector2 position, out Vector2 grid)
+    {
+        return _table.ScreenToGrid(position, out grid);
     }
 
     /// <summary>도안 탭과 완성 도안의 시전 버튼을 도안 위치·회전에 맞춰 놓는다.</summary>
@@ -431,6 +453,7 @@ public sealed class SpellGameUI : MonoBehaviour
             _combatScreen.Tabs[i].Bind(SPELL_NAMES[i], PatternColor(i), position, cell);
             if (castable) _combatScreen.CastButtons[i].Bind(PatternColor(i), _pendingCast == i || (_castDragging && _castDragBoard == i), PatternCenter(i, cell));
         }
+        _table.ProjectControls();
     }
 
     /// <summary>회전된 도안의 실제 삼각 구역을 포함하는 격자 기준 픽셀 경계를 반환한다.</summary>
@@ -560,7 +583,7 @@ public sealed class SpellGameUI : MonoBehaviour
             views[i].gameObject.SetActive(show);
             if (!show) continue;
             SpellGame.Enemy enemy = _game.Enemies[i];
-            ((RectTransform)views[i].transform).anchoredPosition = new Vector2(ENEMY_X[count - 1][i], -ENEMY_BOTTOM);
+            ((RectTransform)views[i].transform).anchoredPosition = count == 1 ? _enemyPositions[1] : count == 2 ? Vector2.Lerp(_enemyPositions[i], _enemyPositions[i + 1], 0.5f) : _enemyPositions[i];
             views[i].SetWidth(count >= 3 ? ENEMY_NARROW_BAR_WIDTH : ENEMY_BAR_WIDTH);
             bool boss = enemy.MaxHealth >= 60, large = enemy.MaxHealth >= 26;
             Vector2 size = boss ? BOSS_SIZE : large ? LARGE_ENEMY_SIZE : NORMAL_ENEMY_SIZE;
@@ -944,6 +967,12 @@ public sealed class SpellGameUI : MonoBehaviour
     private void EnsurePatterns()
     {
         _layout.EnsurePlaced(_game.Spells);
+        if (_game.CraftCount != 0) return;
+        foreach (int spell in _game.Spells)
+        {
+            if (_layout.IsPlaced(spell)) continue;
+            _layout.Reset(); _layout.EnsurePlaced(_game.Spells); break;
+        }
     }
 
     /// <summary>도안을 새 위치·회전으로 옮기고 결과를 화면에 반영한다. 불가하면 원래 위치·방향을 유지하고 이유를 표시한다.</summary>
