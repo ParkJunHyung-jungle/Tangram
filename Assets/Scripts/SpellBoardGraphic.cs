@@ -6,21 +6,30 @@ using UnityEngine.EventSystems;
 /// <summary>공유 격자와 도안 외곽선, 조각 및 배치·도안 이동 미리 보기를 1/4 구역 단위로 그리고 입력을 전달한다.</summary>
 public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointerClickHandler, IPointerMoveHandler, IPointerExitHandler, IBeginDragHandler, IDragHandler, IEndDragHandler
 {
-    public const float CELL_SIZE = 84f;
     private const float CELL_GAP = 3f;
     private const float OUTLINE_WIDTH = 5f;
     private const float PREVIEW_INSET = 5f;
     private const float PREVIEW_WIDTH = 3f;
     private const int SECTOR_COUNT = SpellPatternLayout.COLUMNS * SpellPatternLayout.ROWS * 4;
 
-    private static readonly Color EMPTY_COLOR = new Color(0.12f, 0.15f, 0.18f);
-    private static readonly Color REQUIRED_COLOR = new Color(0.31f, 0.37f, 0.42f);
-    private static readonly Color TARGET_COLOR = new Color(0.33f, 0.50f, 0.45f);
-    private static readonly Color VALID_COLOR = new Color(0.55f, 0.87f, 0.66f);
-    private static readonly Color INVALID_COLOR = new Color(0.9f, 0.3f, 0.3f);
-    private static readonly Color GUIDE_COLOR = new Color(0.08f, 0.11f, 0.14f, 0.75f);
-    private static readonly Color MOVE_VALID_COLOR = new Color(0.45f, 1f, 0.65f);
-    private static readonly Color MOVE_INVALID_COLOR = new Color(1f, 0.3f, 0.3f);
+    [Header("칸")]
+    [SerializeField] private float _cellSize = 120f;
+
+    [Header("격자 색")]
+    [SerializeField] private Color _emptyColor = new Color(0.078f, 0.102f, 0.188f);
+    [SerializeField] private Color _requiredColor = new Color(0.365f, 0.424f, 0.596f);
+    [SerializeField] private Color _targetColor = new Color(0.306f, 0.541f, 0.494f);
+    [SerializeField] private Color _validColor = new Color(0.482f, 0.878f, 0.627f);
+    [SerializeField] private Color _invalidColor = new Color(0.878f, 0.376f, 0.353f);
+    [SerializeField] private Color _guideColor = new Color(0.165f, 0.2f, 0.337f, 0.9f);
+
+    [Header("조각 색")]
+    [SerializeField] private Color _normalPieceColor = new Color(0.725f, 0.769f, 0.808f);
+    [SerializeField] private Color _flameColor = new Color(0.878f, 0.478f, 0.247f);
+    [SerializeField] private Color _guardColor = new Color(0.31f, 0.584f, 0.839f);
+    [SerializeField] private Color _resonanceColor = new Color(0.655f, 0.467f, 0.851f);
+    [SerializeField] private Color _afterimageColor = new Color(0.333f, 0.78f, 0.702f);
+    [SerializeField] private Color _persistedAfterimageColor = new Color(0.18f, 0.435f, 0.4f);
 
     private readonly bool[] _targets = new bool[SECTOR_COUNT];
     private readonly Vector2[] _corners = new Vector2[4];
@@ -48,6 +57,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     private int _targetsRotation = -1;
 
     public bool IsDraggingPattern { get { return _dragPattern >= 0; } }
+    public float CellSize { get { return _cellSize; } }
 
     /// <summary>표시할 게임 상태와 도안 배치를 설정한다.</summary>
     public void Setup(SpellGameUI ui, SpellGame game, SpellPatternLayout layout)
@@ -65,15 +75,15 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     }
 
     /// <summary>배치 조각의 효과에 맞는 표시 색을 반환한다.</summary>
-    private static Color PieceColor(SpellGame.Placement piece)
+    private Color PieceColor(SpellGame.Placement piece)
     {
         switch (piece.Card.Effect)
         {
-            case SpellGame.Effect.Flame: return new Color(0.85f, 0.42f, 0.2f);
-            case SpellGame.Effect.Guard: return new Color(0.28f, 0.55f, 0.8f);
-            case SpellGame.Effect.Resonance: return new Color(0.65f, 0.40f, 0.8f);
-            case SpellGame.Effect.Afterimage: return piece.HasPersisted ? new Color(0.18f, 0.43f, 0.41f) : new Color(0.31f, 0.76f, 0.68f);
-            default: return new Color(0.68f, 0.73f, 0.75f);
+            case SpellGame.Effect.Flame: return _flameColor;
+            case SpellGame.Effect.Guard: return _guardColor;
+            case SpellGame.Effect.Resonance: return _resonanceColor;
+            case SpellGame.Effect.Afterimage: return piece.HasPersisted ? _persistedAfterimageColor : _afterimageColor;
+            default: return _normalPieceColor;
         }
     }
 
@@ -97,8 +107,8 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     private Vector2 CellGeometry(float left, float down, float inset)
     {
         Rect rect = rectTransform.rect;
-        float l = rect.xMin + left + inset, r = rect.xMin + left + CELL_SIZE - CELL_GAP - inset;
-        float top = rect.yMax - down - inset, bottom = rect.yMax - down - CELL_SIZE + CELL_GAP + inset;
+        float l = rect.xMin + left + inset, r = rect.xMin + left + _cellSize - CELL_GAP - inset;
+        float top = rect.yMax - down - inset, bottom = rect.yMax - down - _cellSize + CELL_GAP + inset;
         _corners[0] = new Vector2(l, top); _corners[1] = new Vector2(r, top); _corners[2] = new Vector2(r, bottom); _corners[3] = new Vector2(l, bottom);
         return new Vector2((l + r) / 2, (top + bottom) / 2);
     }
@@ -123,24 +133,24 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
         bool valid = preview && _ui.CanPreviewGrid(hoverSpell, new Vector2Int(_hoverX, _hoverY));
         for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
         {
-            Vector2 center = CellGeometry(x * CELL_SIZE, y * CELL_SIZE, 0);
+            Vector2 center = CellGeometry(x * _cellSize, y * _cellSize, 0);
             for (int sector = 0; sector < 4; sector++)
             {
-                Color color = EMPTY_COLOR;
+                Color color = _emptyColor;
                 int owner;
                 if (_layout.TryFindOwner(x, y, sector, owned, out owner))
                 {
-                    color = _targets[(y * SpellPatternLayout.COLUMNS + x) * 4 + sector] ? TARGET_COLOR : REQUIRED_COLOR;
+                    color = _targets[(y * SpellPatternLayout.COLUMNS + x) * 4 + sector] ? _targetColor : _requiredColor;
                     Vector2Int local; int localSector;
                     _layout.GridToLocal(owner, x, y, sector, out local, out localSector);
                     IReadOnlyList<SpellGame.Placement> pieces = _game.Boards[owner].Pieces;
                     for (int i = 0; i < pieces.Count; i++)
                         if ((CellMask(pieces[i].Card, pieces[i].X, pieces[i].Y, pieces[i].Rotation, local.x, local.y) & (1 << localSector)) != 0) color = PieceColor(pieces[i]);
                 }
-                if (preview && (CellMask(selected, _hoverX, _hoverY, _ui.Rotation, x, y) & (1 << sector)) != 0) color = valid ? VALID_COLOR : INVALID_COLOR;
+                if (preview && (CellMask(selected, _hoverX, _hoverY, _ui.Rotation, x, y) & (1 << sector)) != 0) color = valid ? _validColor : _invalidColor;
                 Sector(vh, center, _corners[sector], _corners[(sector + 1) % 4], color);
             }
-            for (int side = 0; side < 4; side++) Line(vh, center, _corners[side], 1.2f, GUIDE_COLOR);
+            for (int side = 0; side < 4; side++) Line(vh, center, _corners[side], 1.2f, _guideColor);
             for (int sector = 0; sector < 4; sector++)
             {
                 int owner;
@@ -158,7 +168,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
         {
             bool movable = _layout.MoveIssue(_dragPattern, _previewOrigin, _dragRotation, owned) == null;
             Color ghost = _ui.PatternColor(_dragPattern);
-            DrawPatternShape(vh, _dragPattern, _dragRotation, new Vector2(_previewOrigin.x * CELL_SIZE, _previewOrigin.y * CELL_SIZE), PREVIEW_INSET, null, movable ? MOVE_VALID_COLOR : MOVE_INVALID_COLOR, PREVIEW_WIDTH);
+            DrawPatternShape(vh, _dragPattern, _dragRotation, new Vector2(_previewOrigin.x * _cellSize, _previewOrigin.y * _cellSize), PREVIEW_INSET, null, movable ? _validColor : _invalidColor, PREVIEW_WIDTH);
             DrawPatternShape(vh, _dragPattern, _dragRotation, _ghostTopLeft, 0, new Color(ghost.r, ghost.g, ghost.b, 0.28f), new Color(ghost.r, ghost.g, ghost.b, 0.9f), PREVIEW_WIDTH);
         }
     }
@@ -171,7 +181,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
         {
             int mask = SpellPatternLayout.GridMask(spell, Vector2Int.zero, rotation, x, y);
             if (mask == 0) continue;
-            Vector2 center = CellGeometry(topLeft.x + x * CELL_SIZE, topLeft.y + y * CELL_SIZE, inset);
+            Vector2 center = CellGeometry(topLeft.x + x * _cellSize, topLeft.y + y * _cellSize, inset);
             for (int sector = 0; sector < 4; sector++)
             {
                 if ((mask & (1 << sector)) == 0) continue;
@@ -233,7 +243,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     {
         x = y = sector = 0; Vector2 pixels;
         if (!ToGridPixels(data, position, out pixels)) return false;
-        float u = pixels.x / CELL_SIZE, v = pixels.y / CELL_SIZE;
+        float u = pixels.x / _cellSize, v = pixels.y / _cellSize;
         if (u < 0 || u >= SpellPatternLayout.COLUMNS || v < 0 || v >= SpellPatternLayout.ROWS) return false;
         x = (int)u; y = (int)v; float dx = u - x - 0.5f, dy = v - y - 0.5f;
         sector = Mathf.Abs(dx) > Mathf.Abs(dy) ? (dx > 0 ? 1 : 3) : (dy > 0 ? 2 : 0); return true;
@@ -264,9 +274,9 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
         Vector2 pixels;
         if (!ToGridPixels(data, data.position, out pixels)) return;
         Vector2Int grab = SpellPatternLayout.RotateLocal(_dragPattern, _dragRotation, _grabLocal);
-        Vector2Int cell = new Vector2Int(Mathf.FloorToInt(pixels.x / CELL_SIZE), Mathf.FloorToInt(pixels.y / CELL_SIZE));
+        Vector2Int cell = new Vector2Int(Mathf.FloorToInt(pixels.x / _cellSize), Mathf.FloorToInt(pixels.y / _cellSize));
         _previewOrigin = cell - grab;
-        _ghostTopLeft = pixels - new Vector2((grab.x + 0.5f) * CELL_SIZE, (grab.y + 0.5f) * CELL_SIZE);
+        _ghostTopLeft = pixels - new Vector2((grab.x + 0.5f) * _cellSize, (grab.y + 0.5f) * _cellSize);
         _hasPatternPreview = true;
         _ui.SetPatternHint(_layout.MoveIssue(_dragPattern, _previewOrigin, _dragRotation, _game.Spells));
         SetVerticesDirty();

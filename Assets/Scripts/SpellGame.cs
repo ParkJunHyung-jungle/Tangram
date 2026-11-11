@@ -47,18 +47,20 @@ public sealed class SpellGame
     public sealed class Enemy
     {
         private readonly int[] _pattern;
+        private readonly ReadOnlyCollection<int> _patternView;
 
         public string Name { get; internal set; }
         public int Health { get; internal set; }
         public int MaxHealth { get; internal set; }
 
         public int Intent { get { return _pattern[ActionCount % _pattern.Length]; } }
+        public ReadOnlyCollection<int> Pattern { get { return _patternView; } }
         internal int ActionCount;
 
         /// <summary>이름, 체력과 공격 패턴으로 적의 전투 상태를 초기화한다.</summary>
         internal Enemy(string name, int health, int[] pattern)
         {
-            Name = name; Health = health; MaxHealth = health; _pattern = pattern;
+            Name = name; Health = health; MaxHealth = health; _pattern = pattern; _patternView = Array.AsReadOnly(pattern);
         }
     }
 

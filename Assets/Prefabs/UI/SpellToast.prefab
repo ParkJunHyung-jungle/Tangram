@@ -107,6 +107,9 @@ MonoBehaviour:
   _rect: {fileID: 4021630758780812638}
   _group: {fileID: 4432893931159128585}
   _label: {fileID: 7085763271105959103}
+  _ring: {fileID: 2732101909064454111}
+  _icon: {fileID: 1692749789726673443}
+  _warningMark: {fileID: 270684892045787056}
 --- !u!1 &270684892045787056
 GameObject:
   m_ObjectHideFlags: 0

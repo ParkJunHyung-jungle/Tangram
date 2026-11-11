@@ -91,6 +91,13 @@ public sealed class SpellEnemyView : MonoBehaviour
         _hitArea.interactable = !dead;
     }
 
+    /// <summary>이름과 체력 바의 너비를 슬롯 간격에 맞춘다.</summary>
+    public void SetWidth(float width)
+    {
+        _healthRect.sizeDelta = new Vector2(width, _healthRect.sizeDelta.y);
+        _nameRect.sizeDelta = new Vector2(width, _nameRect.sizeDelta.y);
+    }
+
     /// <summary>시전 직후 적 위에 짧게 깜빡이는 색을 설정한다. alpha가 0이면 숨긴다.</summary>
     public void SetImpact(Color color, float alpha)
     {
