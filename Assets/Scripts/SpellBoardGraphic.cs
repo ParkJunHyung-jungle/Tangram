@@ -4,6 +4,7 @@ using UnityEngine.EventSystems;
 /// <summary>공유 격자와 도안 외곽선, 조각 및 배치 미리 보기를 그린다.</summary>
 public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointerClickHandler, IPointerMoveHandler, IPointerExitHandler, IBeginDragHandler, IDragHandler, IEndDragHandler
 {
+    public const float CELL_SIZE = 84f;
     private SpellGameUI _ui;
     private SpellGame _game;
     private int _hoverX = -1;
@@ -39,7 +40,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     protected override void OnPopulateMesh(UnityEngine.UI.VertexHelper vh)
     {
         vh.Clear(); if (_game == null) return;
-        const float size = 72;
+        const float size = CELL_SIZE;
         int hoverBoard, hoverLocalX, hoverLocalY;
         bool hoverMapped = _ui.MapCell(_hoverX, _hoverY, out hoverBoard, out hoverLocalX, out hoverLocalY);
         bool preview = hoverMapped && _ui.SelectedCard != null;
@@ -110,7 +111,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     {
         x = y = sector = 0; Vector2 p;
         if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rectTransform, position, data.pressEventCamera, out p)) return false;
-        Rect rect = rectTransform.rect; float u = (p.x - rect.xMin) / 72, v = (rect.yMax - p.y) / 72;
+        Rect rect = rectTransform.rect; float u = (p.x - rect.xMin) / CELL_SIZE, v = (rect.yMax - p.y) / CELL_SIZE;
         if (u < 0 || u >= 6 || v < 0 || v >= 3) return false;
         x = (int)u; y = (int)v; float dx = u - x - 0.5f, dy = v - y - 0.5f;
         sector = Mathf.Abs(dx) > Mathf.Abs(dy) ? (dx > 0 ? 1 : 3) : (dy > 0 ? 2 : 0); return true;
@@ -161,7 +162,22 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     public void OnPointerMove(PointerEventData data)
     {
         int x, y, sector, board, lx, ly;
-        if (GetCell(data, out x, out y, out sector)) { if (_dragPiece) { x -= _pieceOffset.x; y -= _pieceOffset.y; } _hoverX = x; _hoverY = y; if (_ui.MapCell(x, y, out board, out lx, out ly)) _ui.SetPreviewHint(board, lx, ly); else _ui.SetOutsidePreviewHint(); SetVerticesDirty(); }
+        if (GetCell(data, out x, out y, out sector))
+        {
+            if (_dragPiece) { x -= _pieceOffset.x; y -= _pieceOffset.y; }
+            _hoverX = x; _hoverY = y;
+            SpellGame.Card tooltip = null;
+            if (_ui.MapCell(x, y, out board, out lx, out ly))
+            {
+                _ui.SetPreviewHint(board, lx, ly);
+                if (!_dragPiece && _ui.SelectedCard == null)
+                    foreach (SpellGame.Placement piece in _game.Boards[board].Pieces)
+                        if (piece.Card.Effect != SpellGame.Effect.None && (CellMask(piece.Card, piece.X, piece.Y, piece.Rotation, lx, ly) & (1 << sector)) != 0) { tooltip = piece.Card; break; }
+            }
+            else _ui.SetOutsidePreviewHint();
+            _ui.ShowPieceTooltip(tooltip, data.position);
+            SetVerticesDirty();
+        }
     }
     /// <summary>카드 드래그의 포인터 위치에 배치 미리 보기를 표시한다.</summary>
     public void PreviewCard(PointerEventData data)
@@ -170,7 +186,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
         if (GetCell(data, out x, out y, out sector)) OnPointerMove(data);
         else OnPointerExit(data);
     }
-    public void OnPointerExit(PointerEventData data) { _hoverX = _hoverY = -1; _ui.SetPreviewHint(-1, -1, -1); SetVerticesDirty(); }
+    public void OnPointerExit(PointerEventData data) { _hoverX = _hoverY = -1; _ui.ShowPieceTooltip(null, data.position); _ui.SetPreviewHint(-1, -1, -1); SetVerticesDirty(); }
     public void OnPointerClick(PointerEventData data)
     {
         if (data.button != PointerEventData.InputButton.Left) return;

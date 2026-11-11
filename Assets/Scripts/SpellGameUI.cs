@@ -10,6 +10,7 @@ using UnityEngine.InputSystem.UI;
 /// <summary>주문 조각 PoC의 화면과 입력을 전투 상태에 연결한다.</summary>
 public sealed class SpellGameUI : MonoBehaviour
 {
+    private static readonly bool ONBOARDING_ENABLED = false;
     private static readonly string[] SPELL_NAMES = { "불씨", "방벽", "번개", "유성" };
     private static readonly string[] SPELL_EFFECTS = { "단일 피해 6", "방어 7", "단일 피해 12", "전체 피해 10" };
     private static readonly string[] REWARD_NAMES = { "불꽃 삼각형\n공격 피해 +2", "수호 정사각형\n방어 +3", "공명 직사각형\n3칸 이상: 배치 +1", "잔상 1/4 삼각형\n시전 후 1회 유지", "도안: 번개\n단일 피해 12", "도안: 유성\n전체 피해 10" };
@@ -25,6 +26,9 @@ public sealed class SpellGameUI : MonoBehaviour
     private Font _font;
     private UnityEngine.UI.Text _previewHint;
     private RectTransform _dragGhost;
+    private RectTransform _pieceTooltip;
+    private RectTransform _castDragLine;
+    private UnityEngine.UI.Text _castPreviewText;
     private SpellBoardGraphic _boardGraphic;
     private SpellGame.Card _selectedCard;
     private SpellGame.Placement _selectedPiece;
@@ -120,7 +124,7 @@ public sealed class SpellGameUI : MonoBehaviour
     void Update()
     {
         UpdateFeedback();
-        UpdateOnboarding();
+        if (ONBOARDING_ENABLED) UpdateOnboarding();
         if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
         {
             if (_openPile >= 0) _openPile = -1;
@@ -212,11 +216,12 @@ public sealed class SpellGameUI : MonoBehaviour
     }
 
     /// <summary>텍스트와 클릭 동작을 가진 버튼을 만든다.</summary>
-    private void Button(RectTransform parent, string caption, float x, float y, float width, float height, Action action, Color? color = null, int fontSize = 18)
+    private RectTransform Button(RectTransform parent, string caption, float x, float y, float width, float height, Action action, Color? color = null, int fontSize = 18)
     {
         RectTransform rect = Panel(parent, x, y, width, height, color ?? new Color(0.24f, 0.31f, 0.39f));
         UnityEngine.UI.Button button = rect.gameObject.AddComponent<UnityEngine.UI.Button>();
         button.onClick.AddListener(() => action()); Label(rect, caption, 4, 2, width - 8, height - 4, fontSize);
+        return rect;
     }
 
     /// <summary>현재 게임 단계에 맞춰 화면 요소를 갱신한다.</summary>
@@ -225,7 +230,7 @@ public sealed class SpellGameUI : MonoBehaviour
         if (_pendingCast >= 0 && (_game.CurrentPhase != SpellGame.Phase.Combat || !_game.IsComplete(_pendingCast))) _pendingCast = -1;
         if (_boardGraphic != null) _boardGraphic.CancelDrag();
         if (_dragGhost != null) ClearSelection();
-        _dragGhost = null; _boardGraphic = null; _previewHint = null;
+        _dragGhost = null; _boardGraphic = null; _previewHint = null; _pieceTooltip = null; _castDragLine = null; _castPreviewText = null;
         _onboardingGhost = null; _onboardingGhostGroup = null; _onboardingGhostIcon = null;
         _impactImages.Clear();
         foreach (Transform child in _root) { child.gameObject.SetActive(false); Destroy(child.gameObject); }
@@ -267,57 +272,82 @@ public sealed class SpellGameUI : MonoBehaviour
     /// <summary>전투 상태와 공유 제작판, 손패 및 제어 버튼을 표시한다.</summary>
     private void RenderCombat()
     {
-        Label(_root, $"체력 {_game.Health}/50   ·   방어 {_game.Block}", 30, 5, 290, 30, 18, TextAnchor.MiddleLeft);
-        RectTransform playerTrack = Panel(_root, 30, 37, 250, 6, new Color(0.16f, 0.20f, 0.24f));
+        RectTransform portrait = Panel(_root, 30, 610, 58, 58, new Color(0.27f, 0.35f, 0.42f));
+        portrait.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
+        Label(portrait, "마법사", 0, 0, 58, 58, 13);
+        Label(_root, $"체력 {_game.Health}/50\n방어 {_game.Block}", 95, 610, 130, 50, 15, TextAnchor.MiddleLeft);
+        RectTransform playerTrack = Panel(_root, 95, 662, 120, 6, new Color(0.16f, 0.20f, 0.24f));
         playerTrack.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
-        RectTransform playerFill = Panel(playerTrack, 0, 0, 250 * Mathf.Clamp01(_game.Health / 50f), 6, _game.Health <= 15 ? new Color(0.91f, 0.42f, 0.38f) : new Color(0.48f, 0.79f, 0.76f));
+        RectTransform playerFill = Panel(playerTrack, 0, 0, 120 * Mathf.Clamp01(_game.Health / 50f), 6, _game.Health <= 15 ? new Color(0.91f, 0.42f, 0.38f) : new Color(0.48f, 0.79f, 0.76f));
         playerFill.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
-        Label(_root, $"전투 {_game.Battle}/6", 485, 4, 310, 38, 23);
-        Label(_root, $"턴 {_game.Turn}   ·   남은 배치 {_game.PlacementsLeft}", 925, 5, 320, 34, 19, TextAnchor.MiddleRight);
+        Label(_root, $"전투 {_game.Battle}/6", 30, 8, 180, 38, 19, TextAnchor.MiddleLeft);
+        for (int i = 0; i < 3; i++)
+        {
+            RectTransform placement = Panel(_root, 30 + i * 28, 575, 20, 20, i < _game.PlacementsLeft ? new Color(0.48f, 0.79f, 0.76f) : new Color(0.25f, 0.29f, 0.34f));
+            placement.localRotation = Quaternion.Euler(0, 0, 45);
+            placement.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
+        }
+        if (_game.PlacementsLeft > 3) Label(_root, $"+{_game.PlacementsLeft - 3}", 115, 570, 70, 30, 17, TextAnchor.MiddleLeft);
+        RectTransform placementInfo = Panel(_root, 25, 570, 165, 30, new Color(0, 0, 0, 0));
+        placementInfo.gameObject.AddComponent<SpellTextTooltip>().Setup(this, $"남은 배치 {_game.PlacementsLeft}회");
         for (int i = 0; i < _game.Enemies.Count; i++)
         {
             int index = i; SpellGame.Enemy enemy = _game.Enemies[i];
-            float enemyX = (_game.Enemies.Count == 1 ? 522 : 390) + i * 250;
-            Button(_root, $"{(_pendingCast >= 0 && enemy.Health > 0 ? "대상 선택 ▶ " : i == _game.Target && enemy.Health > 0 ? "▶ " : "")}{enemy.Name}\n체력 {Math.Max(0, enemy.Health)}/{enemy.MaxHealth}   다음 공격 {(enemy.Health > 0 ? enemy.Intent : 0)}", enemyX, 58, 235, 66, () => { if (_pendingCast >= 0) CastSpell(_pendingCast, index); else { _game.SelectTarget(index); Render(); } }, enemy.Health <= 0 ? new Color(0.18f, 0.18f, 0.2f) : _pendingCast >= 0 ? new Color(0.57f, 0.36f, 0.27f) : new Color(0.36f, 0.25f, 0.28f), 16);
-            RectTransform healthTrack = Panel(_root, enemyX + 8, 115, 219, 5, new Color(0.15f, 0.16f, 0.18f));
+            float enemyX = 640 - _game.Enemies.Count * 125 + i * 250;
+            Color silhouette = enemy.Health <= 0 ? new Color(0.22f, 0.23f, 0.26f) : enemy.MaxHealth >= 60 ? new Color(0.56f, 0.38f, 0.42f) : enemy.MaxHealth >= 26 ? new Color(0.38f, 0.47f, 0.42f) : new Color(0.46f, 0.40f, 0.50f);
+            RectTransform figure = Element("Enemy silhouette", _root, enemyX + 28, 15, 95, 92);
+            float figureScale = enemy.MaxHealth >= 60 ? 2.15f : enemy.MaxHealth >= 26 ? 2f : 1.8f;
+            figure.localScale = Vector3.one * figureScale;
+            Panel(figure, 34, 0, 27, 26, silhouette).GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
+            Panel(figure, 25, 27, 45, 42, silhouette).GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
+            Panel(figure, 11, 31, 13, 36, silhouette).GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
+            Panel(figure, 71, 31, 13, 36, silhouette).GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
+            Panel(figure, 26, 70, 18, 22, silhouette).GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
+            Panel(figure, 51, 70, 18, 22, silhouette).GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
+            RectTransform enemyTarget = Button(_root, "", enemyX, 15, 235, 220, () => { if (_pendingCast >= 0) CastSpell(_pendingCast, index); else { _game.SelectTarget(index); Render(); } }, _pendingCast >= 0 && enemy.Health > 0 ? new Color(0.85f, 0.62f, 0.3f, 0.22f) : new Color(0.12f, 0.15f, 0.20f, 0.08f));
+            enemyTarget.gameObject.AddComponent<SpellEnemyHover>().Setup(this);
+            Label(_root, $"{(_pendingCast >= 0 && enemy.Health > 0 ? "대상 선택 ▶ " : i == _game.Target && enemy.Health > 0 ? "▶ " : "")}{enemy.Name}  {Math.Max(0, enemy.Health)}/{enemy.MaxHealth}\n다음 공격 {(enemy.Health > 0 ? enemy.Intent : 0)}", enemyX, 205, 235, 36, 14);
+            RectTransform healthTrack = Panel(_root, enemyX + 8, 243, 219, 5, new Color(0.15f, 0.16f, 0.18f));
             healthTrack.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
             RectTransform healthFill = Panel(healthTrack, 0, 0, 219 * Mathf.Clamp01((float)enemy.Health / enemy.MaxHealth), 5, new Color(0.91f, 0.48f, 0.40f));
             healthFill.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
             if (Time.unscaledTime < _feedbackUntil && (_impactAll || index == _impactTarget))
             {
-                RectTransform impact = Panel(_root, enemyX, 58, 235, 66, new Color(_feedbackColor.r, _feedbackColor.g, _feedbackColor.b, 0.3f));
+                RectTransform impact = Panel(_root, enemyX, 15, 235, 220, new Color(_feedbackColor.r, _feedbackColor.g, _feedbackColor.b, 0.3f));
                 UnityEngine.UI.Image image = impact.GetComponent<UnityEngine.UI.Image>();
                 image.raycastTarget = false; _impactImages.Add(image);
             }
         }
         RenderSharedBoard();
-        Button(_root, $"뽑기 {_game.DrawCount}", 30, 486, 130, 35, () => { _pendingCast = -1; ClearSelection(); _openPile = 0; Render(); }, null, 16);
-        Button(_root, $"버림 {_game.DiscardCount}", 170, 486, 130, 35, () => { _pendingCast = -1; ClearSelection(); _openPile = 1; Render(); }, null, 16);
-        Label(_root, $"제작 중 {_game.CraftCount}     {_message}", 315, 486, 700, 35, 18, TextAnchor.MiddleLeft);
+        Button(_root, $"뽑기 {_game.DrawCount}", 235, 590, 100, 58, () => { _pendingCast = -1; ClearSelection(); _openPile = 0; Render(); }, null, 16);
+        Button(_root, $"버림 {_game.DiscardCount}", 950, 590, 100, 58, () => { _pendingCast = -1; ClearSelection(); _openPile = 1; Render(); }, null, 16);
+        Label(_root, $"제작 중 {_game.CraftCount}     {_message}", 30, 550, 310, 32, 14, TextAnchor.MiddleLeft);
         for (int i = 0; i < _game.Hand.Count; i++)
         {
             SpellGame.Card card = _game.Hand[i];
-            RectTransform cardPanel = Panel(_root, 30 + i * 148, 525, 144, 126, CardColor(card, card == _selectedCard));
+            float handStart = 350 + (7 - _game.Hand.Count) * 25;
+            RectTransform cardPanel = Panel(_root, handStart + i * 85, 565, 81, 115, CardColor(card, card == _selectedCard));
             UnityEngine.UI.Button cardButton = cardPanel.gameObject.AddComponent<UnityEngine.UI.Button>();
             cardButton.onClick.AddListener(() => { _pendingCast = -1; _selectedCard = card; _selectedPiece = null; _selectedBoard = -1; _rotation = 0; _message = "R 또는 우클릭: 회전"; Render(); });
             cardPanel.gameObject.AddComponent<SpellCardDrag>().Setup(this, card);
-            RectTransform iconRect = Element("Shape", cardPanel, card.Shape == SpellGame.Shape.Rectangle ? 0 : 36, 4, card.Shape == SpellGame.Shape.Rectangle ? 144 : 72, 72);
+            cardPanel.gameObject.AddComponent<SpellPieceTooltip>().Setup(this, card);
+            RectTransform iconRect = Element("Shape", cardPanel, card.Shape == SpellGame.Shape.Rectangle ? 1 : 12, card.Shape == SpellGame.Shape.Rectangle ? 12 : 4, card.Shape == SpellGame.Shape.Rectangle ? 80 : 56, card.Shape == SpellGame.Shape.Rectangle ? 40 : 56);
             iconRect.gameObject.AddComponent<CanvasRenderer>();
             SpellShapeGraphic icon = iconRect.gameObject.AddComponent<SpellShapeGraphic>();
             icon.raycastTarget = false; icon.Shape = card.Shape;
-            Label(cardPanel, CardName(card), 2, 78, 140, 46, 14);
+            Label(cardPanel, CardName(card).Split('\n')[0], 2, 64, 77, 36, 12);
         }
         int incoming = 0;
         foreach (SpellGame.Enemy enemy in _game.Enemies) if (enemy.Health > 0) incoming += enemy.Intent;
         int expectedDamage = Math.Max(0, incoming - _game.Block);
-        Label(_root, $"예상 피해 {expectedDamage}\n공격 {incoming} − 방어 {_game.Block}", 1055, 480, 200, 58, 15);
-        Button(_root, $"{_game.Turn}턴 종료", 1080, 550, 160, 65, EndPlayerTurn, expectedDamage >= _game.Health ? new Color(0.59f, 0.27f, 0.27f) : new Color(0.32f, 0.40f, 0.49f));
-        Button(_root, "도움말 ?", 1100, 660, 140, 35, () => { _showHelp = true; Render(); }, null, 16);
-        RectTransform hint = Element("Preview Hint", _root, 30, 660, 1020, 30);
+        RectTransform endTurn = Button(_root, $"{_game.Turn}턴 종료", 1080, 635, 160, 65, EndPlayerTurn, expectedDamage >= _game.Health ? new Color(0.59f, 0.27f, 0.27f) : new Color(0.32f, 0.40f, 0.49f));
+        endTurn.gameObject.AddComponent<SpellTextTooltip>().Setup(this, $"예상 피해 {expectedDamage} · 공격 {incoming} − 방어 {_game.Block}");
+        Button(_root, "도움말 ?", 1100, 555, 140, 35, () => { _showHelp = true; Render(); }, null, 16);
+        RectTransform hint = Element("Preview Hint", _root, 30, 520, 310, 28);
         _previewHint = hint.gameObject.AddComponent<UnityEngine.UI.Text>();
         _previewHint.font = _font; _previewHint.fontSize = 17; _previewHint.color = Color.white; _previewHint.raycastTarget = false;
         SetPreviewHint(-1, -1, -1);
-        if (!_onboardingComplete) RenderOnboarding();
+        if (ONBOARDING_ENABLED && !_onboardingComplete) RenderOnboarding();
     }
 
     /// <summary>선택한 더미의 조각별 수량을 순서 없이 표시하고 닫기 입력을 제공한다.</summary>
@@ -353,20 +383,21 @@ public sealed class SpellGameUI : MonoBehaviour
         {
             int target = 0;
             while (target < _game.Enemies.Count && _game.Enemies[target].Health <= 0) target++;
-            float x = (_game.Enemies.Count == 1 ? 522 : 390) + target * 250;
-            holes.Add(new Rect(x, 58, 235, 66)); start = end = new Vector2(x + 117, 91);
+            float x = 640 - _game.Enemies.Count * 125 + target * 250;
+            holes.Add(new Rect(x, 15, 235, 230)); start = end = new Vector2(x + 117, 125);
             step = "target"; message = "이 주문은 선택한 적 하나에게 효과를 적용합니다.\n공격할 적을 선택하세요.";
         }
         else if (!_onboardingPlacementExplained && _game.CraftCount > 0)
         {
-            holes.Add(new Rect(1080, 5, 165, 34)); start = end = Vector2.zero;
+            holes.Add(new Rect(30, 570, 190, 30)); start = end = Vector2.zero;
             step = "placements"; showContinue = true;
             message = "한 턴에 기본 3회 조각을 배치할 수 있습니다.\n시전하지 않은 조각은 다음 턴에도 도안에 남습니다.";
         }
         else if (complete >= 0)
         {
-            float y = 155 + complete * 53;
-            holes.Add(new Rect(1080, y, 95, 44)); start = end = new Vector2(1127, y + 22);
+            float x = _patternPositions[complete].x < 3 ? 230 : 900;
+            float y = 280 + complete * 32;
+            holes.Add(new Rect(x, y, 150, 28)); start = end = new Vector2(x + 75, y + 14);
             step = "cast" + complete; message = "도안이 완성되어 주문이 준비됐습니다.\n시전 버튼을 눌러 주문을 사용하세요.";
         }
         else
@@ -392,17 +423,17 @@ public sealed class SpellGameUI : MonoBehaviour
             }
             if (cardIndex < 0)
             {
-                holes.Add(new Rect(1080, 550, 160, 65)); start = end = new Vector2(1160, 582);
+                holes.Add(new Rect(1080, 635, 160, 65)); start = end = new Vector2(1160, 667);
                 step = "turn"; message = "턴을 종료하면 적이 공격하고 새 턴에 조각과 배치 횟수를 받습니다.\n주문을 이어서 완성하세요.";
             }
             else
             {
                 ghostCard = _game.Hand[cardIndex]; ghostRotation = rotation;
-                float cardX = 30 + cardIndex * 148;
+                float cardX = 350 + (7 - _game.Hand.Count) * 25 + cardIndex * 85;
                 Vector2Int origin = _patternPositions[board];
-                float gridX = 115 + (origin.x + cellX) * 72, gridY = 183 + (origin.y + cellY) * 72;
-                holes.Add(new Rect(cardX, 525, 144, 126)); holes.Add(new Rect(gridX, gridY, 72, 72));
-                start = new Vector2(cardX + 72, 588); end = new Vector2(gridX + 36, gridY + 36);
+                float gridX = 390 + (origin.x + cellX) * SpellBoardGraphic.CELL_SIZE, gridY = 280 + (origin.y + cellY) * SpellBoardGraphic.CELL_SIZE;
+                holes.Add(new Rect(cardX, 565, 81, 115)); holes.Add(new Rect(gridX, gridY, SpellBoardGraphic.CELL_SIZE, SpellBoardGraphic.CELL_SIZE));
+                start = new Vector2(cardX + 40, 622); end = new Vector2(gridX + 42, gridY + 42);
                 step = "place" + ghostCard.Id + ":" + board + ":" + cellX + ":" + cellY + ":" + rotation;
                 message = "도안에 조각을 채우면 주문을 시전할 수 있습니다.\n손패에서 조각을 선택해 도안의 빈칸으로 드래그하세요." + ((_selectedCard == ghostCard ? _rotation : 0) != rotation ? "\nR 또는 우클릭으로 회전해 빈 영역에 맞추세요." : "");
             }
@@ -525,28 +556,149 @@ public sealed class SpellGameUI : MonoBehaviour
     /// <summary>하나의 격자에 보유 도안과 각 도안의 포기 버튼을 표시한다.</summary>
     private void RenderSharedBoard()
     {
-        RectTransform panel = Panel(_root, 55, 135, 1170, 340, new Color(0.19f, 0.24f, 0.30f));
-        Label(panel, "주문서  /  완성 후 시전 버튼을 누르세요", 60, 10, 432, 28, 16, TextAnchor.MiddleLeft);
+        RectTransform panel = Panel(_root, 30, 260, 1220, 320, new Color(0.12f, 0.16f, 0.20f, 0.15f));
         EnsurePatterns();
-        for (int i = 0; i < 4; i++)
-        {
-            if (!_game.Spells.Contains(i)) continue;
-            int index = i;
-            RectTransform handle = Panel(panel, 550, 20 + i * 53, 370, 44, new Color(0.25f, 0.32f, 0.39f));
-            handle.gameObject.AddComponent<SpellPatternDrag>().Setup(this, index);
-            RectTransform marker = Panel(handle, 4, 6, 6, 32, PatternColor(i));
-            marker.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
-            Label(handle, $"↕ {SPELL_NAMES[i]}: {Preview(_game.Boards[i])}{(_game.IsComplete(i) ? " · 완성" : _patternPlaced[i] ? "" : " · 배치 필요")}", 16, 0, 344, 44, 15, TextAnchor.MiddleLeft);
-            Button(panel, "포기", 930, 20 + i * 53, 85, 44, () => { if (!_game.Abandon(index)) _message = "손패가 가득 차 포기할 수 없습니다"; else { ClearSelection(); _message = ""; } Render(); }, null, 14);
-            Button(panel, _game.IsComplete(i) ? "시전" : "미완성", 1025, 20 + i * 53, 95, 44, () => BeginCast(index), _game.IsComplete(i) ? PatternColor(i) * 0.65f : new Color(0.2f, 0.24f, 0.28f), 14);
-        }
-        RectTransform grid = Element("Grid", panel, 60, 48, 432, 216);
+        RectTransform grid = Element("Grid", panel, 360, 20, 504, 252);
         grid.gameObject.AddComponent<CanvasRenderer>();
         SpellBoardGraphic graphic = grid.gameObject.AddComponent<SpellBoardGraphic>();
         graphic.Setup(this, _game);
         _boardGraphic = graphic;
-        Label(panel, "조각을 드래그해 이동 · 손패로 드래그해 회수", 550, 234, 520, 30, 15, TextAnchor.MiddleLeft);
-        Button(panel, "선택 조각 회수", 550, 275, 180, 40, () => { if (_selectedPiece == null || !_game.Recall(_selectedBoard, _selectedPiece)) _message = "회수할 조각을 선택하세요 (손패 최대 7장)"; else { ClearSelection(); _message = ""; } Render(); }, null, 16);
+        for (int i = 0; i < 4; i++)
+        {
+            if (!_game.Spells.Contains(i)) continue;
+            int index = i;
+            RectTransform handle = Panel(panel, 360 + i * 80, 1, 74, 18, PatternColor(i) * 0.6f);
+            handle.gameObject.AddComponent<SpellPatternDrag>().Setup(this, index);
+            handle.gameObject.AddComponent<SpellTextTooltip>().Setup(this, $"{SPELL_NAMES[i]} · {Preview(_game.Boards[i])}\n드래그해 도안 이동");
+            Label(handle, $"↕ {SPELL_NAMES[i]}", 3, 0, 48, 18, 11, TextAnchor.MiddleLeft);
+            Button(handle, "×", 52, 0, 22, 18, () => { if (!_game.Abandon(index)) _message = "손패가 가득 차 비울 수 없습니다"; else { ClearSelection(); _message = ""; } Render(); }, null, 12);
+            if (_game.IsComplete(i))
+            {
+                float castX = _patternPositions[i].x < 3 ? 200 : 870;
+                RectTransform cast = Panel(panel, castX, 20 + i * 32, 150, 28, PatternColor(i) * 0.65f);
+                cast.gameObject.AddComponent<SpellCastInput>().Setup(this, index);
+                cast.gameObject.AddComponent<SpellTextTooltip>().Setup(this, $"{SPELL_NAMES[i]} · {Preview(_game.Boards[i])}");
+                Label(cast, $"{SPELL_NAMES[i]} · 시전", 2, 0, 146, 28, 13);
+            }
+        }
+    }
+
+    /// <summary>완성된 도안 버튼 클릭으로 해당 주문의 시전을 시작한다.</summary>
+    public void ClickCast(int board)
+    {
+        if (CanInteract) BeginCast(board);
+    }
+
+    /// <summary>손패의 조각 설명을 마우스 위치 근처에 표시하거나 지운다.</summary>
+    public void ShowPieceTooltip(SpellGame.Card card, Vector2 screenPosition)
+    {
+        ShowTextTooltip(card == null ? null : CardName(card), screenPosition);
+    }
+
+    /// <summary>지정한 설명을 화면 좌표 근처에 표시하거나 지운다.</summary>
+    public void ShowTextTooltip(string message, Vector2 screenPosition)
+    {
+        if (_pieceTooltip != null) Destroy(_pieceTooltip.gameObject);
+        _pieceTooltip = null;
+        if (message == null || !CanInteract || _dragGhost != null || _pendingCast >= 0 || (ONBOARDING_ENABLED && !_onboardingComplete)) return;
+        Vector2 point;
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(_root, screenPosition, null, out point)) return;
+        float x = Mathf.Clamp(point.x - _root.rect.xMin, 0, 1010);
+        float y = Mathf.Clamp(_root.rect.yMax - point.y - 86, 0, 630);
+        _pieceTooltip = Panel(_root, x, y, 270, 78, new Color(0.11f, 0.16f, 0.22f, 0.98f));
+        _pieceTooltip.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
+        Label(_pieceTooltip, message, 8, 4, 254, 70, 15, TextAnchor.MiddleLeft);
+    }
+
+    /// <summary>단일 대상 주문을 놓은 화면 좌표의 살아 있는 적에게 시전한다.</summary>
+    public void DropCast(int board, PointerEventData eventData)
+    {
+        if (_castDragLine != null) Destroy(_castDragLine.gameObject);
+        if (_castPreviewText != null) Destroy(_castPreviewText.gameObject);
+        _castDragLine = null; _castPreviewText = null;
+        if (!CanInteract || (board != 0 && board != 2)) return;
+        Vector2 local;
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(_root, eventData.position, eventData.pressEventCamera, out local)) return;
+        float x = local.x - _root.rect.xMin;
+        float y = _root.rect.yMax - local.y;
+        for (int i = 0; i < _game.Enemies.Count; i++)
+        {
+            float left = 640 - _game.Enemies.Count * 125 + i * 250;
+            if (new Rect(left, 15, 235, 220).Contains(new Vector2(x, y)) && _game.Enemies[i].Health > 0)
+            {
+                CastSpell(board, i);
+                return;
+            }
+        }
+        _pendingCast = -1;
+        _message = "살아 있는 적 위에 놓아 주세요";
+        Render();
+    }
+
+    /// <summary>단일 대상 주문 드래그의 조준선을 준비한다.</summary>
+    public void BeginCastDrag(int board)
+    {
+        if (!CanInteract || (board != 0 && board != 2)) return;
+        ShowPieceTooltip(null, Vector2.zero);
+        _castDragLine = Panel(_root, 0, 0, 1, 3, PatternColor(board));
+        _castDragLine.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
+    }
+
+    /// <summary>시전 드래그 중 포인터 아래의 적과 예상 피해를 안내한다.</summary>
+    public void PreviewCast(int board, PointerEventData eventData)
+    {
+        if (!CanInteract || _previewHint == null || (board != 0 && board != 2)) return;
+        Vector2 local;
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(_root, eventData.position, eventData.pressEventCamera, out local)) return;
+        Vector2 point = new Vector2(local.x - _root.rect.xMin, _root.rect.yMax - local.y);
+        if (_castDragLine != null)
+        {
+            Vector2 start;
+            if (RectTransformUtility.ScreenPointToLocalPointInRectangle(_root, eventData.pressPosition, eventData.pressEventCamera, out start))
+            {
+                Vector2 difference = local - start;
+                _castDragLine.anchoredPosition = new Vector2(start.x - _root.rect.xMin, start.y - _root.rect.yMax);
+                _castDragLine.sizeDelta = new Vector2(difference.magnitude, 3);
+                _castDragLine.localRotation = Quaternion.Euler(0, 0, Mathf.Atan2(difference.y, difference.x) * Mathf.Rad2Deg);
+            }
+        }
+        for (int i = 0; i < _game.Enemies.Count; i++)
+        {
+            float left = 640 - _game.Enemies.Count * 125 + i * 250;
+            SpellGame.Enemy enemy = _game.Enemies[i];
+            if (enemy.Health > 0 && new Rect(left, 15, 235, 220).Contains(point))
+            {
+                int damage = _game.GetSpellDamage(board);
+                _previewHint.text = $"{enemy.Name} · 피해 {damage} · 체력 {enemy.Health} → {Math.Max(0, enemy.Health - damage)}";
+                if (_castPreviewText == null)
+                {
+                    RectTransform preview = Element("Cast preview", _root, left, 0, 235, 25);
+                    _castPreviewText = preview.gameObject.AddComponent<UnityEngine.UI.Text>();
+                    _castPreviewText.font = _font; _castPreviewText.fontSize = 15;
+                    _castPreviewText.alignment = TextAnchor.MiddleCenter;
+                    _castPreviewText.color = Color.yellow; _castPreviewText.raycastTarget = false;
+                }
+                _castPreviewText.rectTransform.anchoredPosition = new Vector2(left, 0);
+                _castPreviewText.text = $"피해 {damage} · {enemy.Health} → {Math.Max(0, enemy.Health - damage)}";
+                return;
+            }
+        }
+        _previewHint.text = "살아 있는 적에게 놓아 시전하세요";
+        if (_castPreviewText != null) { Destroy(_castPreviewText.gameObject); _castPreviewText = null; }
+    }
+
+    /// <summary>클릭 시전의 대상 선택 중 가리킨 적의 예상 피해를 표시한다.</summary>
+    public void PreviewPendingCast(PointerEventData eventData)
+    {
+        if (_pendingCast >= 0) PreviewCast(_pendingCast, eventData);
+    }
+
+    /// <summary>대상 포인터가 벗어나면 예상 피해 표시를 지운다.</summary>
+    public void ClearPendingPreview()
+    {
+        if (_castPreviewText != null) Destroy(_castPreviewText.gameObject);
+        _castPreviewText = null;
+        SetPreviewHint(-1, -1, -1);
     }
 
     /// <summary>새 게임에서 도안 배치를 기본 위치로 되돌린다.</summary>
@@ -744,7 +896,7 @@ public sealed class SpellGameUI : MonoBehaviour
     public void SetPreviewHint(int board, int x, int y)
     {
         if (_previewHint == null) return;
-        string hint = "손패 선택 → 판 클릭 배치   ·   R / 우클릭 회전   ·   Esc 메뉴";
+        string hint = "드래그해 배치 · R / 우클릭 회전";
         if (board >= 0 && _selectedCard != null)
         {
             bool valid = CanPreview(board, x, y);
@@ -784,6 +936,7 @@ public sealed class SpellGameUI : MonoBehaviour
     /// <summary>손패 카드 드래그를 시작하고 포인터를 따라갈 도형을 만든다.</summary>
     public void BeginCardDrag(SpellGame.Card card, Vector2 position)
     {
+        ShowPieceTooltip(null, position);
         _pendingCast = -1;
         if (_selectedCard != card) _rotation = 0;
         _selectedCard = card; _selectedPiece = null; _selectedBoard = -1;
@@ -800,8 +953,8 @@ public sealed class SpellGameUI : MonoBehaviour
     /// <summary>지정 조각의 포인터 추적용 모양을 생성한다.</summary>
     private void CreateDragGhost(SpellGame.Card card, Vector2 position)
     {
-        float width = card.Shape == SpellGame.Shape.Rectangle ? 144 : 72;
-        _dragGhost = Element("Drag Preview", _root, 0, 0, width, 72);
+        float width = card.Shape == SpellGame.Shape.Rectangle ? 2 * SpellBoardGraphic.CELL_SIZE : SpellBoardGraphic.CELL_SIZE;
+        _dragGhost = Element("Drag Preview", _root, 0, 0, width, SpellBoardGraphic.CELL_SIZE);
         _dragGhost.pivot = new Vector2(0.5f, 0.5f);
         _dragGhost.localRotation = Quaternion.Euler(0, 0, -90 * _rotation);
         _dragGhost.gameObject.AddComponent<CanvasRenderer>();
@@ -818,8 +971,8 @@ public sealed class SpellGameUI : MonoBehaviour
         _dragGhost = null;
         Vector2 point;
         bool onHand = RectTransformUtility.ScreenPointToLocalPointInRectangle(_root, eventData.position, null, out point)
-            && point.x - _root.rect.xMin >= 30 && point.x - _root.rect.xMin < 1066
-            && _root.rect.yMax - point.y >= 525 && _root.rect.yMax - point.y <= 651;
+            && point.x - _root.rect.xMin >= 350 && point.x - _root.rect.xMin < 945
+            && _root.rect.yMax - point.y >= 565 && _root.rect.yMax - point.y <= 680;
         if (onHand)
         {
             if (_game.Recall(_selectedBoard, _selectedPiece)) { ClearSelection(); _message = "조각을 손패로 되돌렸습니다"; }
@@ -876,6 +1029,74 @@ public sealed class SpellGameUI : MonoBehaviour
         _boardGraphic.ClearPatternPreview();
         _boardGraphic.DropPattern(eventData, pattern);
     }
+}
+
+/// <summary>도안의 시전 버튼에서 클릭과 드래그를 구분한다.</summary>
+public sealed class SpellCastInput : MonoBehaviour, IPointerDownHandler, IPointerClickHandler, IBeginDragHandler, IDragHandler, IEndDragHandler
+{
+    private SpellGameUI _ui;
+    private int _board;
+    private bool _dragged;
+
+    /// <summary>시전 입력을 처리할 화면과 도안 번호를 설정한다.</summary>
+    public void Setup(SpellGameUI ui, int board) { _ui = ui; _board = board; }
+
+    public void OnPointerDown(PointerEventData eventData) { _dragged = false; }
+
+    public void OnPointerClick(PointerEventData eventData)
+    {
+        if (!_dragged && eventData.button == PointerEventData.InputButton.Left) _ui.ClickCast(_board);
+        _dragged = false;
+    }
+
+    public void OnBeginDrag(PointerEventData eventData) { _dragged = true; _ui.BeginCastDrag(_board); }
+
+    public void OnDrag(PointerEventData eventData) { if (_dragged) _ui.PreviewCast(_board, eventData); }
+
+    public void OnEndDrag(PointerEventData eventData)
+    {
+        if (eventData.button == PointerEventData.InputButton.Left) _ui.DropCast(_board, eventData);
+    }
+}
+
+/// <summary>손패 조각에 포인터를 올리면 설명을 표시한다.</summary>
+public sealed class SpellPieceTooltip : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
+{
+    private SpellGameUI _ui;
+    private SpellGame.Card _card;
+
+    /// <summary>설명할 조각과 화면을 설정한다.</summary>
+    public void Setup(SpellGameUI ui, SpellGame.Card card) { _ui = ui; _card = card; }
+
+    public void OnPointerEnter(PointerEventData eventData) { _ui.ShowPieceTooltip(_card, eventData.position); }
+    public void OnPointerExit(PointerEventData eventData) { _ui.ShowPieceTooltip(null, eventData.position); }
+}
+
+/// <summary>단일 대상 주문의 클릭 시전 중 적에 대한 미리보기를 전달한다.</summary>
+public sealed class SpellEnemyHover : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
+{
+    private SpellGameUI _ui;
+
+    /// <summary>미리보기를 표시할 화면을 설정한다.</summary>
+    public void Setup(SpellGameUI ui) { _ui = ui; }
+
+    public void OnPointerEnter(PointerEventData eventData) { _ui.PreviewPendingCast(eventData); }
+    public void OnPointerExit(PointerEventData eventData) { _ui.ClearPendingPreview(); }
+}
+
+/// <summary>전투 상태 요소의 간단한 설명을 포인터 근처에 표시한다.</summary>
+public sealed class SpellTextTooltip : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler, ISelectHandler, IDeselectHandler
+{
+    private SpellGameUI _ui;
+    private string _message;
+
+    /// <summary>설명을 표시할 화면과 문구를 설정한다.</summary>
+    public void Setup(SpellGameUI ui, string message) { _ui = ui; _message = message; }
+
+    public void OnPointerEnter(PointerEventData eventData) { _ui.ShowTextTooltip(_message, eventData.position); }
+    public void OnPointerExit(PointerEventData eventData) { _ui.ShowTextTooltip(null, eventData.position); }
+    public void OnSelect(BaseEventData eventData) { _ui.ShowTextTooltip(_message, RectTransformUtility.WorldToScreenPoint(null, transform.position)); }
+    public void OnDeselect(BaseEventData eventData) { _ui.ShowTextTooltip(null, Vector2.zero); }
 }
 
 
