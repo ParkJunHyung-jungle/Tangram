@@ -5,23 +5,34 @@ using UnityEngine;
 
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
-using UnityEngine.InputSystem.UI;
 
 /// <summary>주문 조각 PoC의 화면과 입력을 전투 상태에 연결한다.</summary>
 public sealed class SpellGameUI : MonoBehaviour
 {
+    private const float LEGACY_SCALE = 1.5f;
     private static readonly bool ONBOARDING_ENABLED = false;
     private static readonly string[] SPELL_NAMES = { "불씨", "방벽", "번개", "유성" };
     private static readonly string[] SPELL_EFFECTS = { "단일 피해 6", "방어 7", "단일 피해 12", "전체 피해 10" };
     private static readonly string[] REWARD_NAMES = { "불꽃 삼각형\n공격 피해 +2", "수호 정사각형\n방어 +3", "공명 직사각형\n3칸 이상: 배치 +1", "잔상 1/4 삼각형\n시전 후 1회 유지", "도안: 번개\n단일 피해 12", "도안: 유성\n전체 피해 10" };
     private static readonly Color[] PATTERN_COLORS = { new Color(1f, 0.75f, 0.3f), new Color(0.4f, 0.8f, 1f), new Color(0.8f, 0.65f, 1f), new Color(1f, 0.5f, 0.48f) };
     private static readonly IReadOnlyList<Vector2Int>[] PATTERN_CELLS = CreatePatternCells();
+
+    [Header("화면 연결")]
+    [SerializeField] private GameObject _canvas;
+    [SerializeField] private RectTransform _content;
+    [SerializeField] private SpellCombatScreen _combatScreen;
+    [SerializeField] private SpellTitleScreen _titleScreen;
+    [SerializeField] private SpellRewardScreen _rewardScreen;
+    [SerializeField] private SpellResultScreen _resultScreen;
+    [SerializeField] private SpellPauseMenu _pauseMenu;
+    [SerializeField] private SpellHelpPanel _helpPanel;
+    [SerializeField] private SpellPileViewer _pileViewer;
+
     private readonly SpellGame _game = new SpellGame();
     private readonly List<int> _rewards = new List<int>();
     private readonly SpellPatternLayout _layout = new SpellPatternLayout();
     private readonly System.Random _random = new System.Random();
     private RectTransform _root;
-    private GameObject _canvas;
     private Font _font;
     private UnityEngine.UI.Text _previewHint;
     private RectTransform _dragGhost;
@@ -72,33 +83,28 @@ public sealed class SpellGameUI : MonoBehaviour
         return patterns;
     }
 
-    /// <summary>첫 장면에서 게임 화면을 자동으로 생성한다.</summary>
-    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
-    private static void Bootstrap()
-    {
-        new GameObject("SpellGameUI").AddComponent<SpellGameUI>();
-    }
-
     void Awake()
     {
         _font = Font.CreateDynamicFontFromOSFont(new[] { "Malgun Gothic", "Arial" }, 24);
-        GameObject canvas = new GameObject("Spell Canvas", typeof(RectTransform), typeof(Canvas), typeof(UnityEngine.UI.CanvasScaler), typeof(UnityEngine.UI.GraphicRaycaster));
-        _canvas = canvas;
-        canvas.transform.SetParent(transform, false);
-        canvas.GetComponent<Canvas>().renderMode = RenderMode.ScreenSpaceOverlay;
-        UnityEngine.UI.CanvasScaler scaler = canvas.GetComponent<UnityEngine.UI.CanvasScaler>();
-        scaler.uiScaleMode = UnityEngine.UI.CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        scaler.referenceResolution = new Vector2(1280, 720);
-        scaler.screenMatchMode = UnityEngine.UI.CanvasScaler.ScreenMatchMode.Expand;
-        RectTransform canvasRect = canvas.GetComponent<RectTransform>();
-        RectTransform background = Panel(canvasRect, 0, 0, 0, 0, new Color(0.095f, 0.12f, 0.16f));
-        background.anchorMin = Vector2.zero; background.anchorMax = Vector2.one; background.sizeDelta = Vector2.zero;
-        background.GetComponent<UnityEngine.UI.Image>().raycastTarget = false;
-        _root = Element("Content", canvasRect, 0, 0, 1280, 720);
+        // 새 화면 Prefab은 3단계에서 연결한다. 그 전까지는 기존 1280×720 화면을 1920×1080 기준 캔버스에 1.5배로 표시한다.
+        SetNewScreensActive(false);
+        _root = Element("Legacy Content", _content, 0, 0, 1280, 720);
         _root.anchorMin = _root.anchorMax = _root.pivot = new Vector2(0.5f, 0.5f);
         _root.anchoredPosition = Vector2.zero;
-        if (FindFirstObjectByType<EventSystem>() == null) new GameObject("EventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule));
+        _root.localScale = Vector3.one * LEGACY_SCALE;
         Render();
+    }
+
+    /// <summary>씬에 놓인 새 화면 Prefab 인스턴스를 모두 켜거나 끈다.</summary>
+    private void SetNewScreensActive(bool active)
+    {
+        _combatScreen.gameObject.SetActive(active);
+        _titleScreen.gameObject.SetActive(active);
+        _rewardScreen.gameObject.SetActive(active);
+        _resultScreen.gameObject.SetActive(active);
+        _pauseMenu.gameObject.SetActive(active);
+        _helpPanel.gameObject.SetActive(active);
+        _pileViewer.gameObject.SetActive(active);
     }
 
     void OnEnable()
@@ -1023,73 +1029,3 @@ public sealed class SpellGameUI : MonoBehaviour
         else _boardGraphic.CancelDrag();
     }
 }
-
-/// <summary>도안의 시전 버튼에서 클릭과 드래그를 구분한다.</summary>
-public sealed class SpellCastInput : MonoBehaviour, IPointerDownHandler, IPointerClickHandler, IBeginDragHandler, IDragHandler, IEndDragHandler
-{
-    private SpellGameUI _ui;
-    private int _board;
-    private bool _dragged;
-
-    /// <summary>시전 입력을 처리할 화면과 도안 번호를 설정한다.</summary>
-    public void Setup(SpellGameUI ui, int board) { _ui = ui; _board = board; }
-
-    public void OnPointerDown(PointerEventData eventData) { _dragged = false; }
-
-    public void OnPointerClick(PointerEventData eventData)
-    {
-        if (!_dragged && eventData.button == PointerEventData.InputButton.Left) _ui.ClickCast(_board);
-        _dragged = false;
-    }
-
-    public void OnBeginDrag(PointerEventData eventData) { _dragged = true; _ui.BeginCastDrag(_board); }
-
-    public void OnDrag(PointerEventData eventData) { if (_dragged) _ui.PreviewCast(_board, eventData); }
-
-    public void OnEndDrag(PointerEventData eventData)
-    {
-        if (eventData.button == PointerEventData.InputButton.Left) _ui.DropCast(_board, eventData);
-    }
-}
-
-/// <summary>손패 조각에 포인터를 올리면 설명을 표시한다.</summary>
-public sealed class SpellPieceTooltip : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
-{
-    private SpellGameUI _ui;
-    private SpellGame.Card _card;
-
-    /// <summary>설명할 조각과 화면을 설정한다.</summary>
-    public void Setup(SpellGameUI ui, SpellGame.Card card) { _ui = ui; _card = card; }
-
-    public void OnPointerEnter(PointerEventData eventData) { _ui.ShowPieceTooltip(_card, eventData.position); }
-    public void OnPointerExit(PointerEventData eventData) { _ui.ShowPieceTooltip(null, eventData.position); }
-}
-
-/// <summary>단일 대상 주문의 클릭 시전 중 적에 대한 미리보기를 전달한다.</summary>
-public sealed class SpellEnemyHover : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
-{
-    private SpellGameUI _ui;
-
-    /// <summary>미리보기를 표시할 화면을 설정한다.</summary>
-    public void Setup(SpellGameUI ui) { _ui = ui; }
-
-    public void OnPointerEnter(PointerEventData eventData) { _ui.PreviewPendingCast(eventData); }
-    public void OnPointerExit(PointerEventData eventData) { _ui.ClearPendingPreview(); }
-}
-
-/// <summary>전투 상태 요소의 간단한 설명을 포인터 근처에 표시한다.</summary>
-public sealed class SpellTextTooltip : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler, ISelectHandler, IDeselectHandler
-{
-    private SpellGameUI _ui;
-    private string _message;
-
-    /// <summary>설명을 표시할 화면과 문구를 설정한다.</summary>
-    public void Setup(SpellGameUI ui, string message) { _ui = ui; _message = message; }
-
-    public void OnPointerEnter(PointerEventData eventData) { _ui.ShowTextTooltip(_message, eventData.position); }
-    public void OnPointerExit(PointerEventData eventData) { _ui.ShowTextTooltip(null, eventData.position); }
-    public void OnSelect(BaseEventData eventData) { _ui.ShowTextTooltip(_message, RectTransformUtility.WorldToScreenPoint(null, transform.position)); }
-    public void OnDeselect(BaseEventData eventData) { _ui.ShowTextTooltip(null, Vector2.zero); }
-}
-
-
