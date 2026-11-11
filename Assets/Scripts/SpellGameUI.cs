@@ -41,6 +41,7 @@ public sealed class SpellGameUI : MonoBehaviour
     private int _impactTarget = -1;
     private bool _impactAll;
     private bool _showHelp;
+    private int _openPile = -1;
     private bool _showPauseMenu;
     private bool _onboardingComplete;
     private bool _onboardingPlacementExplained;
@@ -109,6 +110,7 @@ public sealed class SpellGameUI : MonoBehaviour
     {
         ClearSelection();
         _pendingCast = -1;
+        _openPile = -1;
         if (_boardGraphic != null) _boardGraphic.CancelDrag();
         if (_dragGhost != null) Destroy(_dragGhost.gameObject);
         _dragGhost = null;
@@ -121,11 +123,12 @@ public sealed class SpellGameUI : MonoBehaviour
         UpdateOnboarding();
         if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
         {
-            if (_showPauseMenu) _showPauseMenu = false;
+            if (_openPile >= 0) _openPile = -1;
+            else if (_showPauseMenu) _showPauseMenu = false;
             else { _showHelp = false; _showPauseMenu = true; _pendingCast = -1; _message = ""; ClearSelection(); _dragGhost = null; }
             _onboardingActivity = Time.unscaledTime; Render(); return;
         }
-        if (_showPauseMenu) return;
+        if (_showPauseMenu || _openPile >= 0) return;
         if (_game.CurrentPhase != SpellGame.Phase.Combat) return;
         if (_showHelp)
         {
@@ -243,6 +246,7 @@ public sealed class SpellGameUI : MonoBehaviour
         }
         else RenderCombat();
         RenderFeedback();
+        if (_openPile >= 0) RenderPile();
         if (_showHelp) RenderHelp();
         if (_showPauseMenu) RenderPauseMenu();
         _renderedPhase = _game.CurrentPhase;
@@ -287,7 +291,9 @@ public sealed class SpellGameUI : MonoBehaviour
             }
         }
         RenderSharedBoard();
-        Label(_root, $"뽑기 {_game.DrawCount}   버림 {_game.DiscardCount}   제작 중 {_game.CraftCount}     {_message}", 30, 486, 1000, 35, 18, TextAnchor.MiddleLeft);
+        Button(_root, $"뽑기 {_game.DrawCount}", 30, 486, 130, 35, () => { _pendingCast = -1; ClearSelection(); _openPile = 0; Render(); }, null, 16);
+        Button(_root, $"버림 {_game.DiscardCount}", 170, 486, 130, 35, () => { _pendingCast = -1; ClearSelection(); _openPile = 1; Render(); }, null, 16);
+        Label(_root, $"제작 중 {_game.CraftCount}     {_message}", 315, 486, 700, 35, 18, TextAnchor.MiddleLeft);
         for (int i = 0; i < _game.Hand.Count; i++)
         {
             SpellGame.Card card = _game.Hand[i];
@@ -305,13 +311,35 @@ public sealed class SpellGameUI : MonoBehaviour
         foreach (SpellGame.Enemy enemy in _game.Enemies) if (enemy.Health > 0) incoming += enemy.Intent;
         int expectedDamage = Math.Max(0, incoming - _game.Block);
         Label(_root, $"예상 피해 {expectedDamage}\n공격 {incoming} − 방어 {_game.Block}", 1055, 480, 200, 58, 15);
-        Button(_root, "턴 종료", 1080, 550, 160, 65, EndPlayerTurn, expectedDamage >= _game.Health ? new Color(0.59f, 0.27f, 0.27f) : new Color(0.32f, 0.40f, 0.49f));
+        Button(_root, $"{_game.Turn}턴 종료", 1080, 550, 160, 65, EndPlayerTurn, expectedDamage >= _game.Health ? new Color(0.59f, 0.27f, 0.27f) : new Color(0.32f, 0.40f, 0.49f));
         Button(_root, "도움말 ?", 1100, 660, 140, 35, () => { _showHelp = true; Render(); }, null, 16);
         RectTransform hint = Element("Preview Hint", _root, 30, 660, 1020, 30);
         _previewHint = hint.gameObject.AddComponent<UnityEngine.UI.Text>();
         _previewHint.font = _font; _previewHint.fontSize = 17; _previewHint.color = Color.white; _previewHint.raycastTarget = false;
         SetPreviewHint(-1, -1, -1);
         if (!_onboardingComplete) RenderOnboarding();
+    }
+
+    /// <summary>선택한 더미의 조각별 수량을 순서 없이 표시하고 닫기 입력을 제공한다.</summary>
+    private void RenderPile()
+    {
+        Button(_root, "", 0, 0, 1280, 720, () => { _openPile = -1; Render(); }, new Color(0f, 0f, 0f, 0.75f));
+        RectTransform panel = Panel(_root, 365, 120, 550, 480, new Color(0.16f, 0.20f, 0.26f));
+        Label(panel, _openPile == 0 ? "드로우 덱" : "묘지", 20, 10, 510, 40, 24);
+        Dictionary<string, int> summary = _game.GetPileSummary(_openPile == 0);
+        List<string> keys = new List<string>(summary.Keys);
+        keys.Sort(StringComparer.Ordinal);
+        int row = 0;
+        foreach (string key in keys)
+        {
+            string[] parts = key.Split(':');
+            SpellGame.Shape shape = (SpellGame.Shape)Enum.Parse(typeof(SpellGame.Shape), parts[0]);
+            SpellGame.Effect effect = (SpellGame.Effect)Enum.Parse(typeof(SpellGame.Effect), parts[1]);
+            SpellGame.Card card = new SpellGame.Card { Shape = shape, Effect = effect };
+            Label(panel, CardName(card).Replace("\n", " · ") + $"  × {summary[key]}", 25, 55 + row * 34, 500, 32, 15, TextAnchor.MiddleLeft);
+            row++;
+        }
+        Button(panel, "닫기", 195, 420, 160, 45, () => { _openPile = -1; Render(); });
     }
 
     /// <summary>첫 주문까지 현재 가능한 조작을 강조하고 설명과 고스트를 준비한다.</summary>
@@ -833,7 +861,7 @@ public sealed class SpellGameUI : MonoBehaviour
     /// <summary>현재 선택한 카드와 회전을 반환한다.</summary>
     public SpellGame.Card SelectedCard { get { return _selectedCard; } }
     public int Rotation { get { return _rotation; } }
-    public bool CanInteract { get { return isActiveAndEnabled && !_showPauseMenu && !_showHelp && _game.CurrentPhase == SpellGame.Phase.Combat; } }
+    public bool CanInteract { get { return isActiveAndEnabled && !_showPauseMenu && !_showHelp && _openPile < 0 && _game.CurrentPhase == SpellGame.Phase.Combat; } }
 
     /// <summary>목록에서 이동하는 도안의 미리 보기를 현재 제작판에 전달한다.</summary>
     public void PreviewPatternDrag(PointerEventData eventData, int pattern)

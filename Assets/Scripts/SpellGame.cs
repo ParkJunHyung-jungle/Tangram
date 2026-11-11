@@ -88,6 +88,29 @@ public sealed class SpellGame
     public int DiscardCount { get { return _discard.Count; } }
     public int CraftCount { get { int count = 0; foreach (Board board in Boards) count += board.Pieces.Count; return count; } }
 
+    /// <summary>드로우 또는 버림 더미의 조각별 수량을 읽기 전용 요약으로 반환한다.</summary>
+    public Dictionary<string, int> GetPileSummary(bool isDrawPile)
+    {
+        Dictionary<string, int> summary = new Dictionary<string, int>();
+        foreach (Card card in isDrawPile ? _draw : _discard)
+        {
+            string key = card.Shape + ":" + card.Effect;
+            if (!summary.ContainsKey(key)) summary.Add(key, 0);
+            summary[key]++;
+        }
+        return summary;
+    }
+
+    /// <summary>지정한 도안의 현재 조각 효과를 반영한 공격 피해를 반환한다.</summary>
+    public int GetSpellDamage(int boardIndex)
+    {
+        if (boardIndex < 0 || boardIndex >= Boards.Count || boardIndex == 1) return 0;
+        int damage = boardIndex == 0 ? 6 : boardIndex == 2 ? 12 : 10;
+        foreach (Placement piece in Boards[boardIndex].Pieces)
+            if (piece.Card.Effect == Effect.Flame) damage += 2;
+        return damage;
+    }
+
     /// <summary>카드, 적, 도안과 제작판의 읽기 전용 목록을 연결한다.</summary>
     public SpellGame()
     {
@@ -308,18 +331,16 @@ public sealed class SpellGame
         if (CurrentPhase != Phase.Combat || !IsComplete(boardIndex)) return false;
         if ((boardIndex == 0 || boardIndex == 2) && (target < 0 || target >= Enemies.Count || Enemies[target].Health <= 0)) return false;
         if (boardIndex == 0 || boardIndex == 2) Target = target;
-        Board board = Boards[boardIndex]; int flame = 0, guard = 0, extraPlacements = 0;
+        Board board = Boards[boardIndex]; int guard = 0, extraPlacements = 0;
         foreach (Placement p in board.Pieces)
         {
-            if (p.Card.Effect == Effect.Flame) flame += 2;
             if (p.Card.Effect == Effect.Guard) guard += 3;
             if (p.Card.Effect == Effect.Resonance && board.Spell >= 2) extraPlacements++;
         }
-        int damage = board.Spell == 0 ? 6 : board.Spell == 2 ? 12 : board.Spell == 3 ? 10 : 0;
+        int damage = GetSpellDamage(boardIndex);
         Block += guard + (board.Spell == 1 ? 7 : 0);
         if (damage > 0)
         {
-            damage += flame;
             if (board.Spell == 3) { foreach (Enemy enemy in Enemies) if (enemy.Health > 0) enemy.Health -= damage; }
             else Enemies[Target].Health -= damage;
         }
