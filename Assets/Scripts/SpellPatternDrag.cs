@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using UnityEngine.EventSystems;
 
 /// <summary>도안 목록에서 공유 격자로 도안을 드래그한다.</summary>

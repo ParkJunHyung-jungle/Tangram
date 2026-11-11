@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using UnityEngine.EventSystems;
 
 /// <summary>공유 격자와 도안 외곽선, 조각 및 배치 미리 보기를 그린다.</summary>
