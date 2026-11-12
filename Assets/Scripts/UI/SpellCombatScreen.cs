@@ -27,7 +27,6 @@ public sealed class SpellCombatScreen : MonoBehaviour
     [SerializeField] private SpellHandCardView[] _hand;
     [SerializeField] private RectTransform _handDropArea;
     [SerializeField] private Text _boardCount;
-    [SerializeField] private Text _incoming;
     [SerializeField] private SpellButtonView _endTurn;
 
     [Header("겹쳐 뜨는 요소")]
@@ -57,7 +56,6 @@ public sealed class SpellCombatScreen : MonoBehaviour
     public SpellHandCardView[] Hand { get { return _hand; } }
     public RectTransform HandDropArea { get { return _handDropArea; } }
     public Text BoardCount { get { return _boardCount; } }
-    public Text Incoming { get { return _incoming; } }
     public SpellButtonView EndTurn { get { return _endTurn; } }
     public SpellMoreMenuView MoreMenu { get { return _moreMenu; } }
     public SpellToastView Toast { get { return _toast; } }

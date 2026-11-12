@@ -58,6 +58,9 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
 
     public bool IsDraggingPattern { get { return _dragPattern >= 0; } }
     public float CellSize { get { return _cellSize; } }
+    public int PreviewPatternIndex { get { return _hasPatternPreview ? _dragPattern : -1; } }
+    public Vector2Int PreviewOrigin { get { return _previewOrigin; } }
+    public int PreviewRotation { get { return _dragRotation; } }
 
     /// <summary>표시할 게임 상태와 도안 배치를 설정한다.</summary>
     public void Setup(SpellGameUI ui, SpellGame game, SpellPatternLayout layout)
@@ -68,10 +71,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     /// <summary>도형이 지정 칸에서 차지하는 삼각 구역 마스크를 반환한다. 좌표와 회전은 같은 기준(격자 또는 도안)을 쓴다.</summary>
     private static int CellMask(SpellGame.Card card, int x, int y, int rotation, int cellX, int cellY)
     {
-        rotation = (rotation % 4 + 4) % 4;
-        if (cellX == x && cellY == y) return card.Shape == SpellGame.Shape.QuarterTriangle ? 1 << rotation : card.Shape == SpellGame.Shape.Triangle ? (1 << rotation) | (1 << ((rotation + 1) % 4)) : 15;
-        if (card.Shape == SpellGame.Shape.Rectangle && cellX == x + (rotation % 2 == 0 ? 1 : 0) && cellY == y + (rotation % 2 == 1 ? 1 : 0)) return 15;
-        return 0;
+        return SpellGame.ShapeMaskAt(card.Shape, x, y, rotation, cellX, cellY);
     }
 
     /// <summary>배치 조각의 효과에 맞는 표시 색을 반환한다.</summary>
@@ -83,7 +83,8 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
             case SpellGame.Effect.Guard: return _guardColor;
             case SpellGame.Effect.Resonance: return _resonanceColor;
             case SpellGame.Effect.Afterimage: return piece.HasPersisted ? _persistedAfterimageColor : _afterimageColor;
-            default: return _normalPieceColor;
+            case SpellGame.Effect.None: return _normalPieceColor;
+            default: return _ui.EffectColor(piece.Card.Effect);
         }
     }
 
@@ -145,7 +146,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
                     _layout.GridToLocal(owner, x, y, sector, out local, out localSector);
                     IReadOnlyList<SpellGame.Placement> pieces = _game.Boards[owner].Pieces;
                     for (int i = 0; i < pieces.Count; i++)
-                        if ((CellMask(pieces[i].Card, pieces[i].X, pieces[i].Y, pieces[i].Rotation, local.x, local.y) & (1 << localSector)) != 0) color = PieceColor(pieces[i]);
+                        if ((pieces[i].CellMask(local.x, local.y) & (1 << localSector)) != 0) color = PieceColor(pieces[i]);
                 }
                 if (preview && (CellMask(selected, _hoverX, _hoverY, _ui.Rotation, x, y) & (1 << sector)) != 0) color = valid ? _validColor : _invalidColor;
                 Sector(vh, center, _corners[sector], _corners[(sector + 1) % 4], color);
@@ -233,6 +234,11 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     /// <summary>화면 좌표를 격자 왼쪽 위 기준 픽셀 좌표(x 오른쪽, y 아래)로 바꾼다.</summary>
     private bool ToGridPixels(PointerEventData data, Vector2 position, out Vector2 pixels)
     {
+        if (_ui.IsTableActive)
+        {
+            bool mapped = _ui.TryTableGrid(position, out Vector2 grid);
+            pixels = grid * _cellSize; return mapped;
+        }
         Vector2 p; pixels = Vector2.zero;
         if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rectTransform, position, data.pressEventCamera, out p)) return false;
         Rect rect = rectTransform.rect; pixels = new Vector2(p.x - rect.xMin, rect.yMax - p.y); return true;
@@ -363,7 +369,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
         _layout.GridToLocal(owner, x, y, sector, out local, out localSector);
         IReadOnlyList<SpellGame.Placement> pieces = _game.Boards[owner].Pieces;
         for (int i = 0; i < pieces.Count; i++)
-            if ((CellMask(pieces[i].Card, pieces[i].X, pieces[i].Y, pieces[i].Rotation, local.x, local.y) & (1 << localSector)) != 0) return pieces[i];
+            if ((pieces[i].CellMask(local.x, local.y) & (1 << localSector)) != 0) return pieces[i];
         return null;
     }
 

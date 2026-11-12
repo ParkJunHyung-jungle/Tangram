@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 
 using UnityEngine;
 using UnityEngine.UI;
@@ -7,7 +6,8 @@ using UnityEngine.UI;
 /// <summary>보상 후보 카드(특수 조각 또는 새 도안)의 종류, 모양, 이름을 표시하고 선택을 전달한다.</summary>
 public sealed class SpellRewardCardView : MonoBehaviour
 {
-    private const int GRID = 3;
+    private const float SHAPE_CELL = 44f;
+    private const float PATTERN_CELL = 40f;
 
     [Header("구성")]
     [SerializeField] private Button _button;
@@ -18,46 +18,32 @@ public sealed class SpellRewardCardView : MonoBehaviour
     [SerializeField] private SpellShapeGraphic _shape;
     [SerializeField] private Image[] _patternCells;
 
-    private Vector2[] _cellPositions;
-    private float _cellStep;
     private int _reward;
     private Action<int> _onChoose;
 
     void Awake()
     {
         _button.onClick.AddListener(Choose);
-        // 3×3 칸의 원래 위치를 기억해 두고, 도안이 차지한 범위만 가운데로 옮긴다.
-        _cellPositions = new Vector2[_patternCells.Length];
-        for (int i = 0; i < _patternCells.Length; i++) _cellPositions[i] = _patternCells[i].rectTransform.anchoredPosition;
-        _cellStep = _cellPositions[1].x - _cellPositions[0].x;
     }
 
-    /// <summary>특수 조각 보상을 표시한다.</summary>
+    /// <summary>조각 보상을 표시한다. 모양 영역은 도형 범위에 맞춰 칸 크기를 유지한다.</summary>
     public void BindPiece(int reward, string displayName, SpellGame.Shape shape, Color accent, Action<int> onChoose)
     {
-        Bind(reward, "특수 조각", displayName, accent, onChoose);
+        Bind(reward, "조각", displayName, accent, onChoose);
         _shapeArea.gameObject.SetActive(true);
-        _shapeArea.sizeDelta = shape == SpellGame.Shape.Rectangle ? new Vector2(112, 56) : new Vector2(56, 56);
+        _shapeArea.sizeDelta = SpellPiece3D.CellBounds(SpellGame.ShapeCells(shape, 0)) * SHAPE_CELL;
         _shape.Shape = shape; _shape.color = accent;
         foreach (Image cell in _patternCells) cell.gameObject.SetActive(false);
     }
 
-    /// <summary>새 도안 보상을 표시한다. cells는 도안이 차지하는 3×3 안의 칸이다.</summary>
-    public void BindPattern(int reward, string displayName, IReadOnlyList<Vector2Int> cells, Color accent, Action<int> onChoose)
+    /// <summary>도안을 1/4 구역 모양으로 표시한다. kind는 카드 상단 종류 문구이며 기본값은 보상용 "새 도안"이다.</summary>
+    public void BindPattern(int reward, string displayName, int spell, Color accent, Action<int> onChoose, string kind = "새 도안")
     {
-        Bind(reward, "새 도안", displayName, accent, onChoose);
-        _shapeArea.gameObject.SetActive(false);
-        int width = 0, height = 0;
-        for (int c = 0; c < cells.Count; c++) { width = Mathf.Max(width, cells[c].x + 1); height = Mathf.Max(height, cells[c].y + 1); }
-        Vector2 shift = new Vector2((GRID - width) * _cellStep / 2, -(GRID - height) * _cellStep / 2);
-        for (int i = 0; i < _patternCells.Length; i++)
-        {
-            bool used = false;
-            for (int c = 0; c < cells.Count; c++) if (cells[c].x == i % GRID && cells[c].y == i / GRID) used = true;
-            _patternCells[i].gameObject.SetActive(used);
-            _patternCells[i].color = accent;
-            _patternCells[i].rectTransform.anchoredPosition = _cellPositions[i] + shift;
-        }
+        Bind(reward, kind, displayName, accent, onChoose);
+        _shapeArea.gameObject.SetActive(true);
+        _shapeArea.sizeDelta = (Vector2)SpellPatternLayout.BaseSize(spell) * PATTERN_CELL;
+        _shape.SetPattern(spell); _shape.color = accent;
+        foreach (Image cell in _patternCells) cell.gameObject.SetActive(false);
     }
 
     /// <summary>공통 문구와 강조색, 선택 동작을 설정한다.</summary>

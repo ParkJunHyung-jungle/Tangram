@@ -1,0 +1,25 @@
+{
+  "skillOverrides": {
+    "unity:asset-transformer-toolkit": "off",
+    "unity:audio-setup-mixers": "off",
+    "unity:build-gtk": "off",
+    "unity:build-live-game": "off",
+    "unity:create-tile-palette-or-rule-tiles": "off",
+    "unity:implement-in-app-purchases": "off",
+    "unity:initialize-ai-navigation": "off",
+    "unity:levelplay-unity-integration": "off",
+    "unity:migrate-birp-to-urp": "off",
+    "unity:new-unity-project": "off",
+    "unity:optimize-audio": "off",
+    "unity:optimize-web": "off",
+    "unity:physics-3d-collision": "off",
+    "unity:setup-multiplayer-services": "off",
+    "unity:setup-vivox-voice-chat": "off",
+    "unity:shader-graph-create-custom-node": "off",
+    "unity:sprite-segment-3x3grid": "off",
+    "unity:urp-postprocessing": "off",
+    "unity:validate-urp-render-graph-renderer-feature": "off",
+    "unity:2d-pixel-perfect": "off",
+    "unity:create-2d-physics": "off"
+  }
+}
