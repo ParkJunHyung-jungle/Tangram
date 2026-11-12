@@ -30,6 +30,7 @@ public sealed class SpellGame
     private const int PURITY_BONUS = 6;
     private const int VICTORY_HEAL = 6;
     private const int START_HEALTH = 50;
+    private const int DEVELOPER_HEALTH = 9999;
     private const int LAST_BATTLE = 6;
 
     /// <summary>도형이 칸 하나에서 차지하는 위·오른쪽·아래·왼쪽 구역 비트다.</summary>
@@ -161,6 +162,8 @@ public sealed class SpellGame
     private readonly Board[] _boards = CreateBoards();
 
     public ReadOnlyCollection<Card> Hand { get; }
+    public IReadOnlyList<Card> OwnedCards { get { return _owned; } }
+    public static IReadOnlyList<Reward> AvailableCards { get { return Array.AsReadOnly(CARD_POOL); } }
     public ReadOnlyCollection<Enemy> Enemies { get; }
     public ReadOnlyCollection<int> Spells { get; }
     public ReadOnlyCollection<int> OwnedSpells { get; }
@@ -168,6 +171,8 @@ public sealed class SpellGame
     public ReadOnlyCollection<Reward> Rewards { get; }
     public Phase CurrentPhase { get; private set; } = Phase.Title;
     public int Health { get; private set; }
+    public int MaxHealth { get; private set; } = START_HEALTH;
+    public bool IsDeveloperMode { get; private set; }
     public int Block { get; private set; }
     public int Battle { get; private set; }
     public int Turn { get; private set; }
@@ -331,10 +336,12 @@ public sealed class SpellGame
     }
 
     /// <summary>새 게임의 체력, 카드 및 도안을 초기화하고 첫 전투를 시작한다.</summary>
-    public void StartGame()
+    public void StartGame(bool isDeveloperMode = false)
     {
-        _owned.Clear(); _spells.Clear(); _ownedSpells.Clear(); _nextId = 0; Health = START_HEALTH; Battle = 0; LastAcquiredPattern = -1;
-        _ownedSpells.Add(0); _ownedSpells.Add(1); _spells.Add(0); _spells.Add(1);
+        IsDeveloperMode = isDeveloperMode; MaxHealth = isDeveloperMode ? DEVELOPER_HEALTH : START_HEALTH;
+        _owned.Clear(); _spells.Clear(); _ownedSpells.Clear(); _nextId = 0; Health = MaxHealth; Battle = 0; LastAcquiredPattern = -1;
+        int spellCount = isDeveloperMode ? PATTERN_COUNT : 2;
+        for (int i = 0; i < spellCount; i++) { _ownedSpells.Add(i); _spells.Add(i); }
         for (int i = 0; i < 4; i++) AddCard(Shape.Square, Effect.None);
         for (int i = 0; i < 4; i++) AddCard(Shape.Triangle, Effect.None);
         for (int i = 0; i < 2; i++) AddCard(Shape.Rectangle, Effect.None);
@@ -351,6 +358,39 @@ public sealed class SpellGame
         _owned.Add(new Card { Id = ++_nextId, Shape = shape, Effect = effect });
     }
 
+    /// <summary>조각 정의를 보유 덱과 현재 손패에 한 장 추가한다.</summary>
+    public bool AddDebugCard(int index)
+    {
+        if (CurrentPhase != Phase.Combat || index < 0 || index >= CARD_POOL.Length) return false;
+        Reward definition = CARD_POOL[index];
+        AddCard(definition.Shape, definition.Effect);
+        _hand.Add(_owned[_owned.Count - 1]);
+        return true;
+    }
+
+    /// <summary>지정 카드를 보유 덱과 현재 위치에서 제거한다.</summary>
+    public bool RemoveDebugCard(Card card)
+    {
+        if (CurrentPhase != Phase.Combat || !_owned.Remove(card)) return false;
+        _hand.Remove(card); _draw.Remove(card); _discard.Remove(card);
+        foreach (Board board in Boards)
+        {
+            for (int i = board.MutablePieces.Count - 1; i >= 0; i--)
+                if (board.MutablePieces[i].Card == card) board.MutablePieces.RemoveAt(i);
+            UpdateCompleter(board, null);
+        }
+        return true;
+    }
+
+    /// <summary>도안을 보유 목록과 전투 장착 목록에 추가한다.</summary>
+    public bool AddDebugPattern(int spell)
+    {
+        if (CurrentPhase != Phase.Combat || spell < 0 || spell >= PATTERN_COUNT || _spells.Contains(spell)) return false;
+        if (!_ownedSpells.Contains(spell)) _ownedSpells.Add(spell);
+        _spells.Add(spell);
+        return true;
+    }
+
     /// <summary>다음 전투의 적과 덱을 준비하고 첫 턴을 시작한다.</summary>
     private void StartBattle()
     {
@@ -359,12 +399,16 @@ public sealed class SpellGame
         foreach (Card card in _owned) card.HasPersisted = false;
         _draw.AddRange(_owned); Shuffle(_draw);
         GuaranteeOpeningShape(Shape.Square, _draw.Count - 1); GuaranteeOpeningShape(Shape.QuarterTriangle, _draw.Count - 2);
-        if (Battle == 1) AddEnemy(0);
-        if (Battle == 2) { AddEnemy(0); AddEnemy(0); }
-        if (Battle == 3) AddEnemy(1);
-        if (Battle == 4) { AddEnemy(1); AddEnemy(0); }
-        if (Battle == 5) { AddEnemy(1); AddEnemy(1); }
-        if (Battle == 6) AddEnemy(2);
+        if (IsDeveloperMode)
+        {
+            for (int i = 0; i < 3; i++) _enemies.Add(new Enemy("잉크 하수인", DEVELOPER_HEALTH, new[] { 4 }));
+        }
+        else if (Battle == 1) AddEnemy(0);
+        else if (Battle == 2) { AddEnemy(0); AddEnemy(0); }
+        else if (Battle == 3) AddEnemy(1);
+        else if (Battle == 4) { AddEnemy(1); AddEnemy(0); }
+        else if (Battle == 5) { AddEnemy(1); AddEnemy(1); }
+        else if (Battle == 6) AddEnemy(2);
         CurrentPhase = Phase.Combat; StartTurn();
     }
 
@@ -684,7 +728,7 @@ public sealed class SpellGame
         }
         board.Completer = null;
         if (e.Draws > 0 && alive) Draw(e.Draws);
-        if (!alive) { if (Battle == LAST_BATTLE) CurrentPhase = Phase.Victory; else { Health = Math.Min(START_HEALTH, Health + VICTORY_HEAL); EnterReward(); } }
+        if (!alive) { if (Battle == LAST_BATTLE) CurrentPhase = Phase.Victory; else { Health = Math.Min(MaxHealth, Health + VICTORY_HEAL); EnterReward(); } }
         return true;
     }
 

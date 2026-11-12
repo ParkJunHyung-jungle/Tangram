@@ -29,11 +29,24 @@ public sealed class SpellLoadoutGrid : UnityEngine.UI.MaskableGraphic, IPointerC
     private int _heldRotation;
     private Vector2Int _hover = new Vector2Int(-1, -1);
 
+    private float CellSize { get { return _cellSize; } }
+
     /// <summary>표시할 도안 배치, 보유 목록, 도안 색과 칸 클릭 동작을 설정한다.</summary>
     public void Setup(SpellPatternLayout layout, IReadOnlyList<int> owned, Func<int, Color> colorOf, Action<Vector2Int> onClick)
     {
         _layout = layout; _owned = owned; _colorOf = colorOf; _onClick = onClick; SetVerticesDirty();
     }
+
+    /// <summary>칸 크기를 유지한 채 현재 행과 열에 맞춰 격자 영역을 확장한다.</summary>
+    public void RefreshSize()
+    {
+        rectTransform.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, _layout.Columns * _cellSize);
+        rectTransform.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, _layout.Rows * _cellSize);
+        SetVerticesDirty();
+    }
+
+    /// <summary>격자 표시 영역을 지정한 화면 좌표만큼 이동한다.</summary>
+    public void Pan(Vector2 offset) { rectTransform.anchoredPosition += offset; }
 
     /// <summary>들고 있는 도안과 방향을 설정한다. spell이 음수면 들고 있지 않다.</summary>
     public void SetHeld(int spell, int rotation) { _held = spell; _heldRotation = rotation; SetVerticesDirty(); }
@@ -49,7 +62,7 @@ public sealed class SpellLoadoutGrid : UnityEngine.UI.MaskableGraphic, IPointerC
     protected override void OnPopulateMesh(UnityEngine.UI.VertexHelper vh)
     {
         vh.Clear(); if (_layout == null) return;
-        for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
+        for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
         {
             Vector2 center = CellGeometry(x, y);
             for (int sector = 0; sector < 4; sector++) Sector(vh, center, sector, _emptyColor);
@@ -72,7 +85,7 @@ public sealed class SpellLoadoutGrid : UnityEngine.UI.MaskableGraphic, IPointerC
     /// <summary>도안 하나를 원점·회전으로 채우고 바깥 경계에 외곽선을 그린다. 격자 밖 구역은 그리지 않는다.</summary>
     private void DrawPattern(UnityEngine.UI.VertexHelper vh, int spell, Vector2Int origin, int rotation, Color fill, Color line)
     {
-        for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
+        for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
         {
             int mask = SpellPatternLayout.GridMask(spell, origin, rotation, x, y);
             if (mask == 0) continue;
@@ -97,8 +110,8 @@ public sealed class SpellLoadoutGrid : UnityEngine.UI.MaskableGraphic, IPointerC
     private Vector2 CellGeometry(int x, int y)
     {
         Rect rect = rectTransform.rect;
-        float left = rect.xMin + x * _cellSize, top = rect.yMax - y * _cellSize;
-        float right = left + _cellSize - CELL_GAP, bottom = top - _cellSize + CELL_GAP;
+        float left = rect.xMin + x * CellSize, top = rect.yMax - y * CellSize;
+        float right = left + CellSize - CELL_GAP, bottom = top - CellSize + CELL_GAP;
         _corners[0] = new Vector2(left, top); _corners[1] = new Vector2(right, top); _corners[2] = new Vector2(right, bottom); _corners[3] = new Vector2(left, bottom);
         return new Vector2((left + right) / 2, (top + bottom) / 2);
     }
@@ -126,8 +139,8 @@ public sealed class SpellLoadoutGrid : UnityEngine.UI.MaskableGraphic, IPointerC
         cell = new Vector2Int(-1, -1);
         if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rectTransform, data.position, data.pressEventCamera, out Vector2 local)) return false;
         Rect rect = rectTransform.rect;
-        int x = Mathf.FloorToInt((local.x - rect.xMin) / _cellSize), y = Mathf.FloorToInt((rect.yMax - local.y) / _cellSize);
-        if (x < 0 || x >= SpellPatternLayout.COLUMNS || y < 0 || y >= SpellPatternLayout.ROWS) return false;
+        int x = Mathf.FloorToInt((local.x - rect.xMin) / CellSize), y = Mathf.FloorToInt((rect.yMax - local.y) / CellSize);
+        if (x < 0 || x >= _layout.Columns || y < 0 || y >= _layout.Rows) return false;
         cell = new Vector2Int(x, y); return true;
     }
 

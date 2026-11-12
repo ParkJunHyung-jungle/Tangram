@@ -15,7 +15,6 @@ public sealed class SpellGameUI : MonoBehaviour
     private const float CURSOR_HINT_OFFSET = 24f;
     private const float CURSOR_HINT_PADDING = 24f;
     private const float TAB_HEIGHT = 36f;
-    private const int PLAYER_MAX_HEALTH = 50;
     private const int BATTLE_COUNT = 6;
     private const float ENEMY_BAR_WIDTH = 320f;
     private const float ENEMY_NARROW_BAR_WIDTH = 280f;
@@ -68,6 +67,11 @@ public sealed class SpellGameUI : MonoBehaviour
     private RectTransform _dragGhost;
     private RectTransform _aimElbow;
     private string _hintText = "";
+    private RectTransform _debugRemote;
+    private RectTransform _debugContents;
+    private bool _showDebugRemote;
+    private int _debugPage;
+    private string _debugNotice = "";
 
     private SpellGame.Card _selectedCard;
     private SpellGame.Placement _selectedPiece;
@@ -108,7 +112,7 @@ public sealed class SpellGameUI : MonoBehaviour
     public SpellGame.Card SelectedCard { get { return _selectedCard; } }
     public int Rotation { get { return _rotation; } }
     public bool IsTableActive { get { return _table != null; } }
-    public bool CanInteract { get { return isActiveAndEnabled && !_showPauseMenu && !_showHelp && _openPile < 0 && _game.CurrentPhase == SpellGame.Phase.Combat; } }
+    public bool CanInteract { get { return isActiveAndEnabled && !_showDebugRemote && !_showPauseMenu && !_showHelp && _openPile < 0 && _game.CurrentPhase == SpellGame.Phase.Combat; } }
 
     void Awake()
     {
@@ -125,6 +129,7 @@ public sealed class SpellGameUI : MonoBehaviour
         _table.Setup(this, _game, _layout, _combatScreen);
         SetupOtherScreens();
         SetupOverlays();
+        SetupDebugRemote();
         Render();
     }
 
@@ -150,6 +155,9 @@ public sealed class SpellGameUI : MonoBehaviour
 
     void Update()
     {
+        if (Keyboard.current != null && Keyboard.current.f2Key.wasPressedThisFrame) { ToggleDebugRemote(); return; }
+        if (_showDebugRemote && Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame) { ToggleDebugRemote(); return; }
+        if (_showDebugRemote) return;
         UpdateFeedback();
         UpdateCursorHint();
         if (ONBOARDING_ENABLED) UpdateOnboarding();
@@ -355,7 +363,89 @@ public sealed class SpellGameUI : MonoBehaviour
     /// <summary>새 게임을 시작하고 도안 배치와 선택을 초기화한다.</summary>
     private void StartNewGame()
     {
-        _game.StartGame(); ResetPatterns(); ClearSelection(); Render();
+        _game.StartGame(); _layout.SetSize(4, 3); ResetPatterns(); ClearSelection(); Render();
+    }
+
+    /// <summary>개발자 전투를 시작하고 모든 도안을 확장 격자에 배치한다.</summary>
+    private void StartDeveloperGame()
+    {
+        _game.StartGame(true); _layout.SetSize(5, 6); ResetPatterns();
+        _layout.EnsurePlaced(_game.Spells); ClearSelection(); Render();
+    }
+
+    /// <summary>타이틀과 전투 화면에 개발자 시작과 리모콘 버튼을 연결한다.</summary>
+    private void SetupDebugRemote()
+    {
+        RectTransform title = (RectTransform)_titleScreen.transform;
+        Button(title, "개발자 모드 시작", 20, 20, 240, 48, StartDeveloperGame);
+        RectTransform combat = (RectTransform)_combatScreen.transform;
+        Button(combat, "리모콘 (F2)", 20, 20, 180, 44, ToggleDebugRemote);
+        Button(combat, "◀ 손패", 20, 75, 120, 40, () => { if (CanInteract) _table.ChangeHandPage(-1); });
+        Button(combat, "손패 ▶", 145, 75, 120, 40, () => { if (CanInteract) _table.ChangeHandPage(1); });
+        Label(combat, "방향키: 판 이동", 20, 120, 245, 30, 16, TextAnchor.MiddleLeft);
+        _debugRemote = Panel(_content, 0, 0, 1920, 1080, new Color(0, 0, 0, 0.55f));
+        _debugRemote.SetAsLastSibling();
+        _debugContents = Panel(_debugRemote, 220, 120, 1480, 850, new Color(0.05f, 0.07f, 0.12f, 0.97f));
+        _debugRemote.gameObject.SetActive(false);
+    }
+
+    /// <summary>리모콘을 전환하고 진행 중인 선택과 조준을 취소한다.</summary>
+    private void ToggleDebugRemote()
+    {
+        _showDebugRemote = !_showDebugRemote;
+        if (_showDebugRemote)
+        {
+            _table.CancelInteractions(); _boardGraphic.CancelDrag(); ClearSelection(); HideDragGhost();
+            _pendingCast = -1; _castDragging = false; _debugPage = 0; _debugNotice = "";
+            RefreshDebugRemote();
+        }
+        _debugRemote.gameObject.SetActive(_showDebugRemote);
+    }
+
+    /// <summary>리모콘의 조각, 도안, 격자와 덱 편집 버튼을 갱신한다.</summary>
+    private void RefreshDebugRemote()
+    {
+        foreach (Transform child in _debugContents) Destroy(child.gameObject);
+        Label(_debugContents, "개발자 리모콘", 20, 10, 400, 40, 26, TextAnchor.MiddleLeft);
+        Button(_debugContents, "닫기", 1320, 10, 130, 40, ToggleDebugRemote);
+        if (_game.CurrentPhase != SpellGame.Phase.Combat)
+        {
+            Label(_debugContents, "전투 중에 사용할 수 있습니다", 40, 80, 600, 50, 22, TextAnchor.MiddleLeft);
+            return;
+        }
+        Label(_debugContents, "조각 추가", 20, 60, 300, 35, 20, TextAnchor.MiddleLeft);
+        for (int i = 0; i < SpellGame.AvailableCards.Count; i++)
+        {
+            int index = i; SpellGame.Reward card = SpellGame.AvailableCards[i];
+            Button(_debugContents, ShapeName(card.Shape) + (card.Effect == SpellGame.Effect.None ? "" : " / " + EffectName(card.Effect)), 20 + i % 4 * 240, 100 + i / 4 * 45, 230, 40,
+                () => { _game.AddDebugCard(index); Render(); RefreshDebugRemote(); }, null, 16);
+        }
+        Label(_debugContents, "도안 추가", 1000, 60, 250, 35, 20, TextAnchor.MiddleLeft);
+        for (int i = 0; i < SpellGame.PATTERN_COUNT; i++)
+        {
+            int spell = i;
+            Button(_debugContents, SpellGame.PatternName(i), 1000 + i % 2 * 210, 100 + i / 2 * 45, 200, 40,
+                () =>
+                {
+                    if (_game.Spells.Contains(spell)) _debugNotice = "이미 장착한 도안입니다.";
+                    else if (!_layout.TryAutoPlace(spell, _game.Spells)) _debugNotice = "빈 공간이 부족합니다. 격자를 확장해 주세요.";
+                    else { _game.AddDebugPattern(spell); _debugNotice = "도안을 배치했습니다."; }
+                    Render(); RefreshDebugRemote();
+                });
+        }
+        Button(_debugContents, "열 +1", 1000, 305, 200, 40, () => { _layout.SetSize(_layout.Columns + 1, _layout.Rows); Render(); RefreshDebugRemote(); });
+        Button(_debugContents, "행 +1", 1210, 305, 200, 40, () => { _layout.SetSize(_layout.Columns, _layout.Rows + 1); Render(); RefreshDebugRemote(); });
+        Label(_debugContents, _debugNotice, 1000, 350, 410, 35, 16, TextAnchor.MiddleLeft);
+        Label(_debugContents, $"격자 {_layout.Columns} × {_layout.Rows} · 덱 {_game.OwnedCards.Count}장 · 손패 {_game.Hand.Count}장", 20, 390, 1000, 35, 20, TextAnchor.MiddleLeft);
+        int maxPage = Mathf.Max(0, (_game.OwnedCards.Count - 1) / 16); _debugPage = Mathf.Clamp(_debugPage, 0, maxPage);
+        Button(_debugContents, "이전", 1050, 390, 120, 40, () => { _debugPage--; RefreshDebugRemote(); });
+        Button(_debugContents, $"다음 {_debugPage + 1}/{maxPage + 1}", 1180, 390, 230, 40, () => { _debugPage++; RefreshDebugRemote(); });
+        for (int i = _debugPage * 16; i < Mathf.Min(_game.OwnedCards.Count, (_debugPage + 1) * 16); i++)
+        {
+            SpellGame.Card card = _game.OwnedCards[i]; int slot = i - _debugPage * 16;
+            Button(_debugContents, "삭제 " + DisplayName(card), 20 + slot % 4 * 345, 445 + slot / 4 * 60, 330, 50,
+                () => { _game.RemoveDebugCard(card); Render(); RefreshDebugRemote(); }, null, 16);
+        }
     }
 
     /// <summary>보상을 고르거나(-1은 건너뛰기) 다음 전투로 넘어간다.</summary>
@@ -405,7 +495,7 @@ public sealed class SpellGameUI : MonoBehaviour
             screen.ProgressDots[i].color = i < _game.Battle - 1 ? _subColor : i == _game.Battle - 1 ? _textColor : _dimColor;
         int incoming = 0;
         foreach (SpellGame.Enemy enemy in _game.Enemies) if (enemy.Health > 0) incoming += enemy.Intent;
-        screen.PlayerStatus.Bind(_game.Health, PLAYER_MAX_HEALTH, _game.Block, Math.Max(0, incoming - _game.Block));
+        screen.PlayerStatus.Bind(_game.Health, _game.MaxHealth, _game.Block, Math.Max(0, incoming - _game.Block));
         screen.Placement.gameObject.SetActive(false);
         screen.BoardCount.gameObject.SetActive(false);
         _boardGraphic.MarkStateDirty();
@@ -471,7 +561,7 @@ public sealed class SpellGameUI : MonoBehaviour
     private Rect PatternBounds(int spell, float cell)
     {
         float left = float.PositiveInfinity, top = float.PositiveInfinity, right = float.NegativeInfinity, bottom = float.NegativeInfinity;
-        for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
+        for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
         {
             int mask = _layout.PlacedMask(spell, x, y);
             for (int sector = 0; sector < 4; sector++)
@@ -493,7 +583,7 @@ public sealed class SpellGameUI : MonoBehaviour
         foreach (int other in _game.Spells)
         {
             if (other == spell || !_layout.IsPlaced(other)) continue;
-            for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
+            for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
                 if (_layout.PlacedMask(other, x, y) != 0 && candidate.Overlaps(new Rect(x * cell, y * cell, cell, cell))) return false;
             if (other < spell && _combatScreen.Tabs[other].gameObject.activeSelf)
             {
@@ -520,7 +610,7 @@ public sealed class SpellGameUI : MonoBehaviour
     private Vector2 PatternCenter(int spell, float cell)
     {
         Vector2 sum = Vector2.zero; int weight = 0;
-        for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
+        for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
         {
             int count = BitCount(_layout.PlacedMask(spell, x, y));
             sum += new Vector2(x + 0.5f, y + 0.5f) * count; weight += count;
