@@ -1,0 +1,13 @@
+{
+  "name": "Combat Layout Proposals",
+  "id": "combat-layout-proposals-local",
+  "api": "1.0.0",
+  "main": "code.js",
+  "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
+  "menu": [
+    { "name": "레이아웃 수정안", "command": "layouts" },
+    { "name": "판타지 UI 키트", "command": "kits" },
+    { "name": "스프라이트 시트 (키트 1)", "command": "sprites" }
+  ]
+}

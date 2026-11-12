@@ -1,0 +1,727 @@
+using System.Collections.Generic;
+
+using UnityEngine;
+
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
+
+/// <summary>공유 격자와 물리 손패를 3D 책상에 표시하고 화면 포인터를 기존 주문 규칙에 연결한다.</summary>
+public sealed class SpellTable3D : MonoBehaviour
+{
+    private const int TABLE_LAYER = 30;
+    private static readonly Vector3 WORLD_ORIGIN = new Vector3(1000, 0, 0);
+    private static readonly Color NORMAL_COLOR = new Color(0.77f, 0.82f, 0.84f);
+    private static readonly Color CLAY_COLOR = new Color(0.72f, 0.56f, 0.44f);
+
+    [Header("테이블 카메라")]
+    [SerializeField, Range(55f, 90f)] private float _cameraAngle = 90f;
+    [SerializeField, Min(4f)] private float _cameraSize = 5.2f;
+
+    [Header("조각과 낙하")]
+    [SerializeField] private GameObject _tablePrefab;
+    [SerializeField, Min(0.5f)] private float _dropHeight = 1.6f;
+    [SerializeField] private Material _pieceMaterial;
+    [SerializeField] private Material _lineMaterial;
+
+    private readonly Dictionary<int, SpellPiece3D> _pieces = new Dictionary<int, SpellPiece3D>();
+    private readonly List<int> _removed = new List<int>();
+    private readonly HashSet<int> _activeCards = new HashSet<int>();
+    private readonly List<RaycastResult> _uiHits = new List<RaycastResult>();
+    private readonly List<Material> _materials = new List<Material>();
+    private SpellGameUI _ui;
+    private SpellGame _game;
+    private SpellPatternLayout _layout;
+    private SpellCombatScreen _screen;
+    private Transform _world;
+    private Transform _boardRoot;
+    private Transform _gridLines;
+    private Transform _boardSurface;
+    private int _gridColumns;
+    private int _gridRows;
+    private int _handPage;
+    private Transform _handRoot;
+    private Transform _patterns;
+    private Transform _preview;
+    private Camera _camera;
+    private Transform _handSurface;
+    private float _cellSize;
+    private Vector3 _boardPan;
+    private PhysicsMaterial _physicsMaterial;
+    private PointerEventData _pointer;
+    private InputAction _pickAction;
+    private InputAction _rotateAction;
+    private int _requestedRotations;
+    private Vector2 _downPosition;
+    private Vector2 _upPosition;
+    private bool _hasPress;
+    private bool _hasRelease;
+    private SpellPiece3D _picked;
+    private Vector2Int _anchor;
+    private Vector2Int _local;
+    private int _rotation;
+    private int _localRotation;
+    private int _destination = -1;
+    private bool _isHolding;
+    private bool _isClickSelected;
+    private Vector2 _pressPosition;
+    private float _lastAngle;
+    private float _lastAspect;
+    private int _previewPattern = -1;
+    private Vector2Int _previewOrigin;
+    private int _previewRotation;
+    private bool _hadTableHover;
+    private int _castSource = -1;
+    private int _dragTemplate = -1;
+    private bool _isCastDragging;
+    private bool _isTemplateDragging;
+
+    public bool IsDragging { get { return _picked != null || _castSource >= 0 || _dragTemplate >= 0; } }
+
+    /// <summary>기존 전투 모델과 UI를 받아 전용 카메라, 판과 물리 손패 공간을 초기화한다.</summary>
+    public void Setup(SpellGameUI ui, SpellGame game, SpellPatternLayout layout, SpellCombatScreen screen)
+    {
+        _ui = ui; _game = game; _layout = layout; _screen = screen;
+        _pointer = new PointerEventData(EventSystem.current);
+        _pickAction = new InputAction("Table pick", InputActionType.Button, "<Mouse>/leftButton");
+        _pickAction.performed += RecordPress; _pickAction.canceled += RecordRelease; _pickAction.Enable();
+        _rotateAction = new InputAction("Rotate held piece", InputActionType.Button);
+        _rotateAction.AddBinding("<Keyboard>/r"); _rotateAction.AddBinding("<Mouse>/rightButton");
+        _rotateAction.performed += RecordRotation; _rotateAction.Enable();
+        _physicsMaterial = new PhysicsMaterial("Piece bounce") { bounciness = 0.32f, dynamicFriction = 0.65f, staticFriction = 0.75f, bounceCombine = PhysicsMaterialCombine.Maximum };
+        _world = Instantiate(_tablePrefab).transform;
+        _world.position = WORLD_ORIGIN;
+        _camera = CreateRoot("Table Camera", _world).gameObject.AddComponent<Camera>();
+        _camera.orthographic = true; _camera.orthographicSize = _cameraSize;
+        _camera.clearFlags = CameraClearFlags.SolidColor; _camera.backgroundColor = new Color(0.035f, 0.045f, 0.075f);
+        _camera.cullingMask = 1 << TABLE_LAYER; _camera.depth = 10; _camera.nearClipPlane = 0.1f; _camera.farClipPlane = 50;
+        Light light = CreateRoot("Table Key Light", _world).gameObject.AddComponent<Light>();
+        light.type = LightType.Directional; light.intensity = 0.8f; light.color = new Color(1f, 0.91f, 0.77f);
+        light.cullingMask = 1 << TABLE_LAYER; light.transform.rotation = Quaternion.Euler(52, -25, 0);
+        _boardRoot = _world.Find("Grid 3 x 4");
+        _handRoot = _world.Find("Physical Hand");
+        Transform boardSurface = _boardRoot.Find("Board slab");
+        _boardSurface = boardSurface;
+        _handSurface = _handRoot.Find("Hand tray");
+        Vector3 boardSize = boardSurface.localScale;
+        _cellSize = Mathf.Max(0.1f, (boardSize.x - 0.22f) / SpellPatternLayout.COLUMNS);
+        boardSize.z = _cellSize * SpellPatternLayout.ROWS + 0.22f;
+        boardSurface.localScale = boardSize;
+        boardSurface.localPosition = Vector3.down * boardSize.y * 0.5f;
+        _handSurface.localPosition = Vector3.down * _handSurface.localScale.y * 0.5f;
+        boardSurface.GetComponent<BoxCollider>().sharedMaterial = _physicsMaterial;
+        _handSurface.GetComponent<BoxCollider>().sharedMaterial = _physicsMaterial;
+        _patterns = CreateRoot("Spell Outlines", _boardRoot);
+        _preview = CreateRoot("Template Preview", _boardRoot);
+        _gridLines = CreateRoot("Grid Lines", _boardRoot);
+        RebuildGrid();
+        ConfigureCamera();
+        _screen.Board.enabled = false;
+        _screen.HandDropArea.gameObject.SetActive(false);
+        foreach (SpellHandCardView card in _screen.Hand) card.gameObject.SetActive(false);
+        foreach (SpellCastInput input in _screen.GetComponentsInChildren<SpellCastInput>(true)) input.enabled = false;
+        foreach (SpellPatternDrag input in _screen.GetComponentsInChildren<SpellPatternDrag>(true)) input.enabled = false;
+    }
+
+    /// <summary>새 오브젝트를 전용 레이어의 지정 부모 아래에 만들고 변환을 반환한다.</summary>
+    private static Transform CreateRoot(string name, Transform parent)
+    {
+        GameObject obj = new GameObject(name); obj.layer = TABLE_LAYER;
+        obj.transform.SetParent(parent, false); return obj.transform;
+    }
+
+    /// <summary>원본 재질을 복사해 지정 색을 설정하고 종료 시 정리할 목록에 등록한다.</summary>
+    private Material Colored(Material source, Color color)
+    {
+        Material material = new Material(source); material.color = color; _materials.Add(material); return material;
+    }
+
+    /// <summary>현재 격자 크기에 맞춰 판과 격자선을 갱신한다.</summary>
+    private void RebuildGrid()
+    {
+        _gridColumns = _layout.Columns; _gridRows = _layout.Rows;
+        Vector3 size = _boardSurface.localScale;
+        size.x = _cellSize * _gridColumns + 0.22f; size.z = _cellSize * _gridRows + 0.22f;
+        _boardSurface.localScale = size;
+        foreach (Transform line in _gridLines) Destroy(line.gameObject);
+        BuildSurfaces();
+    }
+
+    /// <summary>현재 격자 크기에 맞춰 격자선을 만든다.</summary>
+    private void BuildSurfaces()
+    {
+        Material grid = Colored(_lineMaterial, new Color(0.46f, 0.49f, 0.57f));
+        for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
+        {
+            Vector2 a = new Vector2(x, y), b = new Vector2(x + 1, y), c = new Vector2(x + 1, y + 1), d = new Vector2(x, y + 1);
+            Line(_gridLines, new[] { GridLocal(a), GridLocal(b), GridLocal(c), GridLocal(d), GridLocal(a) }, grid, 0.016f);
+            Line(_gridLines, new[] { GridLocal(a), GridLocal(c) }, grid, 0.016f);
+            Line(_gridLines, new[] { GridLocal(b), GridLocal(d) }, grid, 0.016f);
+        }
+    }
+
+    /// <summary>로컬 꼭짓점들을 잇는 굵은 선을 만들고 지정 재질을 공유한다.</summary>
+    private static void Line(Transform parent, Vector3[] vertices, Material material, float width)
+    {
+        LineRenderer line = CreateRoot("Inlaid line", parent).gameObject.AddComponent<LineRenderer>();
+        line.useWorldSpace = false; line.positionCount = vertices.Length; line.SetPositions(vertices);
+        line.widthMultiplier = width; line.sharedMaterial = material; line.numCapVertices = 2;
+        line.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; line.receiveShadows = false;
+    }
+
+    /// <summary>격자 좌표를 판 중심 기준 월드 축 방향의 로컬 좌표로 바꾼다.</summary>
+    private Vector3 GridLocal(Vector2 point, float height = 0.025f)
+    {
+        return new Vector3((point.x - _layout.Columns * 0.5f) * _cellSize, height, (_layout.Rows * 0.5f - point.y) * _cellSize);
+    }
+
+    /// <summary>Inspector 각도로 카메라를 조정하고 판과 손패를 목표 화면 위치에 놓는다.</summary>
+    private void ConfigureCamera()
+    {
+        _camera.transform.rotation = Quaternion.Euler(_cameraAngle, 0, 0);
+        _camera.transform.position = WORLD_ORIGIN - _camera.transform.forward * 15f;
+        _camera.orthographicSize = _cameraSize;
+        _boardRoot.position = ViewportOnTable(ViewportCenter(_screen.Board.rectTransform)) + _boardPan;
+        _handRoot.position = ViewportOnTable(ViewportCenter(_screen.HandDropArea));
+        FitHandTray();
+        _lastAngle = _cameraAngle; _lastAspect = _camera.aspect;
+    }
+
+    /// <summary>손패 놓기 영역의 화면 범위를 책상면에 투영해 손패 받침의 가로·세로 길이를 맞춘다.</summary>
+    private void FitHandTray()
+    {
+        RectTransform area = _screen.HandDropArea;
+        Vector3 left = ViewportOnTable(ViewportAt(area, new Vector2(0, 0.5f))), right = ViewportOnTable(ViewportAt(area, new Vector2(1, 0.5f)));
+        Vector3 bottom = ViewportOnTable(ViewportAt(area, new Vector2(0.5f, 0))), top = ViewportOnTable(ViewportAt(area, new Vector2(0.5f, 1)));
+        Vector3 size = _handSurface.localScale;
+        size.x = Vector3.Distance(left, right); size.z = Vector3.Distance(bottom, top);
+        _handSurface.localScale = size;
+    }
+
+    /// <summary>뷰포트 위치의 광선과 수평 책상면의 교점을 반환한다.</summary>
+    private Vector3 ViewportOnTable(Vector2 point)
+    {
+        Ray ray = _camera.ViewportPointToRay(point); new Plane(Vector3.up, WORLD_ORIGIN).Raycast(ray, out float distance); return ray.GetPoint(distance);
+    }
+
+    /// <summary>전투 화면 프리팹의 기준 영역 중심을 뷰포트 좌표로 반환한다.</summary>
+    private static Vector2 ViewportCenter(RectTransform rect)
+    {
+        return ViewportAt(rect, new Vector2(0.5f, 0.5f));
+    }
+
+    /// <summary>영역 안의 정규화 위치(0~1)를 뷰포트 좌표로 반환한다.</summary>
+    private static Vector2 ViewportAt(RectTransform rect, Vector2 normalized)
+    {
+        Vector2 screen = RectTransformUtility.WorldToScreenPoint(null, rect.TransformPoint(Rect.NormalizedToPoint(rect.rect, normalized)));
+        return new Vector2(screen.x / Screen.width, screen.y / Screen.height);
+    }
+
+    /// <summary>전투 표시 여부를 바꾸고 화면 전환 시 진행 중인 집기를 취소한다.</summary>
+    public void SetVisible(bool visible)
+    {
+        CancelPick(); _castSource = _dragTemplate = -1; _isCastDragging = _isTemplateDragging = false;
+        if (_world != null) _world.gameObject.SetActive(visible);
+    }
+
+    /// <summary>조각 집기와 도안 이동 및 시전 드래그를 취소한다.</summary>
+    public void CancelInteractions()
+    {
+        CancelPick(); _castSource = _dragTemplate = -1;
+        _isCastDragging = _isTemplateDragging = false;
+        _hasPress = _hasRelease = false; _requestedRotations = 0;
+    }
+
+    /// <summary>모델의 손패·배치 상태와 3D 조각을 동기화하고 새 손패만 낙하시킨다.</summary>
+    public void Sync()
+    {
+        bool resized = _gridColumns != _layout.Columns || _gridRows != _layout.Rows;
+        if (resized) RebuildGrid();
+        _handPage = Mathf.Clamp(_handPage, 0, Mathf.Max(0, (_game.Hand.Count - 1) / 9));
+        CancelPick(); Vector3 previousHandPosition = _handRoot.position;
+        Canvas.ForceUpdateCanvases(); ConfigureCamera();
+        Vector3 handOffset = _handRoot.position - previousHandPosition;
+        if (handOffset.sqrMagnitude > 0.000001f)
+            foreach (SpellPiece3D piece in _pieces.Values) if (piece.IsHand) piece.Body.position += handOffset;
+        _activeCards.Clear();
+        for (int i = _handPage * 9; i < Mathf.Min(_game.Hand.Count, (_handPage + 1) * 9); i++) _activeCards.Add(_game.Hand[i].Id);
+        foreach (int spell in _game.Spells) foreach (SpellGame.Placement piece in _game.Boards[spell].Pieces) _activeCards.Add(piece.Card.Id);
+        _removed.Clear();
+        foreach (KeyValuePair<int, SpellPiece3D> entry in _pieces) if (!_activeCards.Contains(entry.Key)) _removed.Add(entry.Key);
+        foreach (int id in _removed) { Destroy(_pieces[id].gameObject); _pieces.Remove(id); }
+        for (int i = _handPage * 9; i < Mathf.Min(_game.Hand.Count, (_handPage + 1) * 9); i++)
+        {
+            SpellGame.Card card = _game.Hand[i];
+            SpellPiece3D piece = GetPiece(card);
+            if (piece.IsHand)
+            {
+                if (resized) piece.DropToHand(piece.Slot, SlotPosition(piece.Slot), _cellSize, 0.2f);
+                continue;
+            }
+            int slot = FreeSlot(); piece.DropToHand(slot, SlotPosition(slot), _cellSize, _dropHeight + Random.Range(0f, 0.45f));
+        }
+        foreach (int spell in _game.Spells) foreach (SpellGame.Placement placement in _game.Boards[spell].Pieces) PlaceOnBoard(GetPiece(placement.Card), spell, placement);
+        RebuildPatterns(); ProjectControls();
+    }
+
+    /// <summary>손패 페이지를 변경하고 해당 페이지의 조각을 표시한다.</summary>
+    public void ChangeHandPage(int direction)
+    {
+        _handPage = Mathf.Clamp(_handPage + direction, 0, Mathf.Max(0, (_game.Hand.Count - 1) / 9));
+        Sync();
+    }
+
+    /// <summary>배치 조각을 격자 칸 모양과 위치에 고정한다. 다른 조각 위에 겹친 덧칠 조각은 한 층 위에 놓는다.</summary>
+    private void PlaceOnBoard(SpellPiece3D piece, int spell, SpellGame.Placement placement)
+    {
+        List<SpellGame.ShapeCell> cells = _layout.PlacementGridCells(spell, placement);
+        Vector2Int anchor = new Vector2Int(int.MaxValue, int.MaxValue);
+        foreach (SpellGame.ShapeCell cell in cells) anchor = Vector2Int.Min(anchor, new Vector2Int(cell.X, cell.Y));
+        for (int i = 0; i < cells.Count; i++) cells[i] = new SpellGame.ShapeCell(cells[i].X - anchor.x, cells[i].Y - anchor.y, cells[i].Mask);
+        float layer = IsLayered(spell, placement) ? SpellPiece3D.Thickness * _cellSize : 0;
+        piece.PlaceOnBoard(spell, placement, cells, PiecePosition(anchor, cells, 0.045f + layer), _cellSize);
+    }
+
+    /// <summary>덧칠 조각이 같은 판의 다른 조각과 구역을 공유하는지 반환한다.</summary>
+    private bool IsLayered(int spell, SpellGame.Placement placement)
+    {
+        if (placement.Card.Effect != SpellGame.Effect.Overpaint) return false;
+        foreach (SpellGame.Placement other in _game.Boards[spell].Pieces)
+        {
+            if (other == placement) continue;
+            for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) if ((other.CellMask(x, y) & placement.CellMask(x, y)) != 0) return true;
+        }
+        return false;
+    }
+
+    /// <summary>집은 조각을 현재 방향의 칸 모양으로 반환한다. 점토는 한 칸으로 보여 준다.</summary>
+    private IReadOnlyList<SpellGame.ShapeCell> HeldCells()
+    {
+        return SpellGame.ShapeCells(_picked.Card.Shape, _picked.Card.Shape == SpellGame.Shape.Clay ? 0 : _rotation);
+    }
+
+    /// <summary>카드에 대응하는 3D 조각을 재사용하거나 카드 모양과 효과 색으로 생성한다.</summary>
+    private SpellPiece3D GetPiece(SpellGame.Card card)
+    {
+        if (_pieces.TryGetValue(card.Id, out SpellPiece3D piece)) return piece;
+        piece = CreateRoot("Piece " + card.Id + " " + card.Shape, _world).gameObject.AddComponent<SpellPiece3D>();
+        Color color = card.Effect == SpellGame.Effect.None ? card.Shape == SpellGame.Shape.Clay ? CLAY_COLOR : NORMAL_COLOR : _ui.EffectColor(card.Effect);
+        piece.Setup(card, _pieceMaterial, _physicsMaterial, color); _pieces.Add(card.Id, piece); return piece;
+    }
+
+    /// <summary>최대 일곱 조각의 회전 외접원이 겹치지 않는 빈 손패 자리를 무작위로 고른다.</summary>
+    private int FreeSlot()
+    {
+        int first = Random.Range(0, 9);
+        for (int i = 0; i < 9; i++)
+        {
+            int slot = (first + i) % 9; bool used = false;
+            foreach (SpellPiece3D piece in _pieces.Values) if (piece.IsHand && piece.Slot == slot) { used = true; break; }
+            if (!used) return slot;
+        }
+        return 0;
+    }
+
+    /// <summary>손패의 예약 자리 중심을 반환한다. 물리 yaw 회전 중에도 조각끼리 겹치지 않는다.</summary>
+    private Vector3 SlotPosition(int slot)
+    {
+        Vector3 size = _handSurface.localScale;
+        return _handRoot.position + new Vector3((slot % 3 - 1) * size.x * (1.46f / 4.65f), 0.025f, (slot / 3 - 1) * size.z * (1.08f / 3.45f));
+    }
+
+    /// <summary>격자 앵커(범위 왼쪽 위)와 칸 범위로 조각 메시 중심의 월드 위치를 계산한다.</summary>
+    private Vector3 PiecePosition(Vector2Int anchor, IReadOnlyList<SpellGame.ShapeCell> cells, float height)
+    {
+        Vector2 center = anchor + SpellPiece3D.CellBounds(cells) / 2;
+        return _boardRoot.TransformPoint(GridLocal(center, height));
+    }
+
+    /// <summary>화면 좌표를 3D 판 위 소수 격자 좌표로 바꾸고 평면 교차 여부를 반환한다.</summary>
+    public bool ScreenToGrid(Vector2 screenPosition, out Vector2 grid)
+    {
+        Ray ray = _camera.ScreenPointToRay(screenPosition); Plane plane = new Plane(Vector3.up, _boardRoot.position);
+        if (!plane.Raycast(ray, out float distance)) { grid = default; return false; }
+        Vector3 local = _boardRoot.InverseTransformPoint(ray.GetPoint(distance));
+        grid = new Vector2(local.x / _cellSize + _layout.Columns * 0.5f, _layout.Rows * 0.5f - local.z / _cellSize); return true;
+    }
+
+    /// <summary>도안의 삼각 구역을 얇은 입체로 채우고 외부 경계에만 주문 색 외곽선을 그린다.</summary>
+    private void RebuildPatterns()
+    {
+        ClearGeometry(_patterns);
+        foreach (int spell in _game.Spells)
+        {
+            if (!_layout.IsPlaced(spell)) continue;
+            Material fill = new Material(_lineMaterial) { color = _ui.PatternColor(spell) * 0.28f };
+            Material border = new Material(_lineMaterial) { color = _ui.PatternColor(spell) };
+            DrawPattern(_patterns, spell, _layout.Origin(spell), _layout.Rotation(spell), fill, border);
+        }
+    }
+
+    /// <summary>지정 도안 표시의 자식과 해당 표시가 소유한 임시 메시·재질을 정리한다.</summary>
+    private void ClearGeometry(Transform root)
+    {
+        HashSet<Material> materials = new HashSet<Material>();
+        foreach (Renderer renderer in root.GetComponentsInChildren<Renderer>()) materials.Add(renderer.sharedMaterial);
+        foreach (MeshFilter filter in root.GetComponentsInChildren<MeshFilter>()) Destroy(filter.sharedMesh);
+        foreach (Transform child in root) { child.gameObject.SetActive(false); Destroy(child.gameObject); }
+        foreach (Material material in materials) Destroy(material);
+    }
+
+    /// <summary>지정 원점과 회전의 구역 마스크를 표면 메시와 경계선으로 표시한다.</summary>
+    private void DrawPattern(Transform parent, int spell, Vector2Int origin, int rotation, Material fill, Material border)
+    {
+        List<Vector3> vertices = new List<Vector3>(); List<int> triangles = new List<int>();
+        for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
+        {
+            int mask = SpellPatternLayout.GridMask(spell, origin, rotation, x, y);
+            Vector2[] corners = { new Vector2(x, y), new Vector2(x + 1, y), new Vector2(x + 1, y + 1), new Vector2(x, y + 1) };
+            Vector2 center = new Vector2(x + 0.5f, y + 0.5f);
+            for (int sector = 0; sector < 4; sector++)
+            {
+                if ((mask & (1 << sector)) == 0) continue;
+                Vector2 a = corners[sector], b = corners[(sector + 1) % 4]; int start = vertices.Count;
+                vertices.Add(GridLocal(a, 0.015f)); vertices.Add(GridLocal(b, 0.015f)); vertices.Add(GridLocal(center, 0.015f));
+                triangles.Add(start); triangles.Add(start + 1); triangles.Add(start + 2);
+                for (int edge = 0; edge < 3; edge++)
+                {
+                    SpellPatternLayout.Neighbor(x, y, sector, edge, out int nx, out int ny, out int ns);
+                    if ((SpellPatternLayout.GridMask(spell, origin, rotation, nx, ny) & (1 << ns)) != 0) continue;
+                    Vector2 from = edge == 0 ? b : edge == 1 ? center : a;
+                    Vector2 to = edge == 0 ? center : edge == 1 ? a : b;
+                    Line(parent, new[] { GridLocal(from, 0.295f), GridLocal(to, 0.295f) }, border, 0.045f);
+                }
+            }
+        }
+        Mesh mesh = new Mesh { name = "Pattern sectors" }; mesh.SetVertices(vertices); mesh.SetTriangles(triangles, 0); mesh.RecalculateNormals();
+        GameObject obj = CreateRoot("Pattern surface", parent).gameObject;
+        obj.AddComponent<MeshFilter>().sharedMesh = mesh; obj.AddComponent<MeshRenderer>().sharedMaterial = fill;
+    }
+
+    /// <summary>도안 외곽과 중심을 투영해 기존 이름표·시전 버튼을 3D 판 위에 붙인다.</summary>
+    public void ProjectControls()
+    {
+        RectTransform parent = (RectTransform)_screen.Tabs[0].transform.parent;
+        List<Rect> occupied = new List<Rect>();
+        foreach (int spell in _game.Spells)
+        {
+            if (!_layout.IsPlaced(spell)) continue;
+            Vector2 min = Vector2.positiveInfinity, max = Vector2.negativeInfinity, sum = Vector2.zero; int weight = 0;
+            for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
+            {
+                int mask = _layout.PlacedMask(spell, x, y);
+                for (int sector = 0; sector < 4; sector++)
+                {
+                    if ((mask & (1 << sector)) == 0) continue;
+                    Vector2 a = new Vector2(x + (sector == 1 ? 0.5f : 0), y + (sector == 2 ? 0.5f : 0));
+                    Vector2 b = new Vector2(x + (sector == 3 ? 0.5f : 1), y + (sector == 0 ? 0.5f : 1));
+                    min = Vector2.Min(min, a); max = Vector2.Max(max, b); sum += new Vector2(x + 0.5f, y + 0.5f); weight++;
+                }
+            }
+            Vector2 leftTop = OverlayPoint(parent, min), rightBottom = OverlayPoint(parent, max);
+            float width = Mathf.Abs(OverlayPoint(parent, Vector2.right).x - OverlayPoint(parent, Vector2.zero).x);
+            Vector2[] candidates = { leftTop + Vector2.up * 36, new Vector2(leftTop.x, rightBottom.y), leftTop + Vector2.left * width, new Vector2(rightBottom.x, leftTop.y) };
+            Vector2 selected = candidates[0];
+            foreach (Vector2 candidate in candidates)
+            {
+                Rect rect = new Rect(candidate.x, -candidate.y, width, 36); bool collision = false;
+                foreach (Rect previous in occupied) if (rect.Overlaps(previous)) collision = true;
+                foreach (int other in _game.Spells)
+                {
+                    if (other == spell || !_layout.IsPlaced(other)) continue;
+                    for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
+                    {
+                        if (_layout.PlacedMask(other, x, y) == 0) continue;
+                        Vector2 p = OverlayPoint(parent, new Vector2(x, y)); Vector2 q = OverlayPoint(parent, new Vector2(x + 1, y + 1));
+                        if (rect.Overlaps(new Rect(p.x, -p.y, q.x - p.x, p.y - q.y))) collision = true;
+                    }
+                }
+                if (!collision) { selected = candidate; break; }
+            }
+            occupied.Add(new Rect(selected.x, -selected.y, width, 36));
+            _screen.Tabs[spell].Bind(SpellGame.PatternName(spell), _ui.PatternColor(spell), selected, width);
+            _screen.CastButtons[spell].Rect.anchoredPosition = OverlayPoint(parent, sum / Mathf.Max(1, weight));
+        }
+    }
+
+    /// <summary>격자 위치를 이름표 부모의 왼쪽 위 기준 UI 좌표로 투영한다.</summary>
+    private Vector2 OverlayPoint(RectTransform parent, Vector2 grid)
+    {
+        Vector3 screen = _camera.WorldToScreenPoint(_boardRoot.TransformPoint(GridLocal(grid, 0.3f)));
+        RectTransformUtility.ScreenPointToLocalPointInRectangle(parent, screen, null, out Vector2 point);
+        return new Vector2(point.x - parent.rect.xMin, point.y - parent.rect.yMax);
+    }
+
+    void Update()
+    {
+        bool pressed = _hasPress, released = _hasRelease; _hasPress = _hasRelease = false;
+        int rotations = _requestedRotations; _requestedRotations = 0;
+        if (_world == null || !_world.gameObject.activeSelf) return;
+        if (!Mathf.Approximately(_lastAngle, _cameraAngle) || !Mathf.Approximately(_lastAspect, _camera.aspect))
+        {
+            CancelPick(); ConfigureCamera(); Sync();
+            foreach (SpellPiece3D piece in _pieces.Values) if (piece.IsHand) piece.DropToHand(piece.Slot, SlotPosition(piece.Slot), _cellSize, 0.2f);
+        }
+        RefreshTemplatePreview();
+        if (!_ui.CanInteract) { CancelPick(); return; }
+        if (_screen.MoreMenu.IsOpen) { CancelPick(); return; }
+        if (!IsDragging && Keyboard.current != null)
+        {
+            Vector2 direction = new Vector2((Keyboard.current.rightArrowKey.isPressed ? 1 : 0) - (Keyboard.current.leftArrowKey.isPressed ? 1 : 0),
+                (Keyboard.current.upArrowKey.isPressed ? 1 : 0) - (Keyboard.current.downArrowKey.isPressed ? 1 : 0));
+            if (direction.sqrMagnitude > 0) PanBoard(direction.normalized * (3f * Time.unscaledDeltaTime));
+        }
+        if (Mouse.current == null) return;
+        Vector2 pointer = Mouse.current.position.ReadValue();
+        if (pressed && _castSource < 0 && _dragTemplate < 0) BeginOverlayInput();
+        if (_castSource >= 0) { UpdateCastInput(pointer, released); return; }
+        if (_dragTemplate >= 0) { UpdateTemplateInput(pointer, released, rotations); return; }
+        if (_picked == null && pressed && !IsOverControl(_downPosition) && !_screen.Board.IsDraggingPattern)
+        {
+            Ray pressRay = _camera.ScreenPointToRay(_downPosition);
+            if (Physics.Raycast(pressRay, out RaycastHit pressHit, 50f, 1 << TABLE_LAYER))
+            {
+                SpellPiece3D piece = pressHit.collider.GetComponent<SpellPiece3D>();
+                if (piece != null && (piece.IsHand || _game.CanMovePiece(piece.Placement))) BeginPick(piece, _downPosition);
+            }
+        }
+        else if (_picked != null && pressed && _isClickSelected) { FinishPick(_downPosition); return; }
+        if (_picked != null)
+        {
+            if (rotations > 0) { _rotation = (_rotation + rotations) % 4; _picked.SetCells(HeldCells()); }
+            PreviewPick(pointer);
+            if (released && _isHolding)
+            {
+                _isHolding = false;
+                if ((_upPosition - _pressPosition).sqrMagnitude < 36f) _isClickSelected = true;
+                else FinishPick(_upPosition);
+            }
+            return;
+        }
+        if (IsOverControl(pointer) || _screen.Board.IsDraggingPattern) { HideHover(pointer); return; }
+        Ray ray = _camera.ScreenPointToRay(pointer);
+        SpellPiece3D hovered = Physics.Raycast(ray, out RaycastHit hit, 50f, 1 << TABLE_LAYER) ? hit.collider.GetComponent<SpellPiece3D>() : null;
+        if (hovered != null && hovered.IsHand) { _ui.ShowPieceTooltip(hovered.Card, pointer); _hadTableHover = true; }
+        else if (ScreenToGrid(pointer, out Vector2 grid) && OnGrid(grid) && _layout.TryFindTarget((int)grid.x, (int)grid.y, Sector(grid), _game.Spells, out int spell))
+        { _ui.ShowPatternTooltip(spell, pointer, hovered == null ? null : hovered.Card); _hadTableHover = true; }
+        else HideHover(pointer);
+    }
+
+    /// <summary>격자와 배치된 조각을 방향키 입력만큼 이동하고 화면의 도안 조작 위치를 갱신한다.</summary>
+    private void PanBoard(Vector2 direction)
+    {
+        Vector3 delta = new Vector3(direction.x, 0, direction.y);
+        _boardPan += delta; _boardRoot.position += delta;
+        foreach (SpellPiece3D piece in _pieces.Values) if (!piece.IsHand) piece.Body.position += delta;
+        ProjectControls();
+    }
+
+    /// <summary>입력 이벤트 시점의 누른 위치를 저장해 한 프레임 안에 끝난 빠른 드래그도 보존한다.</summary>
+    private void RecordPress(InputAction.CallbackContext context)
+    {
+        _downPosition = Mouse.current.position.ReadValue(); _hasPress = true;
+    }
+
+    /// <summary>놓은 위치를 저장하고 다음 화면 갱신에서 배치 또는 클릭 선택을 마무리한다.</summary>
+    private void RecordRelease(InputAction.CallbackContext context)
+    {
+        _upPosition = Mouse.current.position.ReadValue(); _hasRelease = true;
+    }
+
+    /// <summary>집기 중 회전 입력 횟수를 보존해 짧거나 연속된 입력도 다음 갱신에 모두 반영한다.</summary>
+    private void RecordRotation(InputAction.CallbackContext context)
+    {
+        if (_picked != null || _dragTemplate >= 0) _requestedRotations++;
+    }
+
+    /// <summary>시전 버튼과 도안 이름표의 누른 위치를 기록해 빠른 드래그를 기존 주문 입력에 연결한다.</summary>
+    private void BeginOverlayInput()
+    {
+        foreach (int spell in _game.Spells)
+        {
+            RectTransform cast = _screen.CastButtons[spell].Rect;
+            if (cast.gameObject.activeInHierarchy && RectTransformUtility.RectangleContainsScreenPoint(cast, _downPosition, null))
+            {
+                CancelPick(); _castSource = spell; _isCastDragging = false; return;
+            }
+            RectTransform tab = _screen.Tabs[spell].Rect;
+            if (!tab.gameObject.activeInHierarchy || !RectTransformUtility.RectangleContainsScreenPoint(tab, _downPosition, null)) continue;
+            RectTransformUtility.ScreenPointToLocalPointInRectangle(tab, _downPosition, null, out Vector2 local);
+            if (local.x - tab.rect.xMin >= tab.rect.width - 40f) return;
+            CancelPick(); _dragTemplate = spell; _isTemplateDragging = false; return;
+        }
+    }
+
+    /// <summary>시전 버튼 클릭은 기존 대상 선택에, 드래그는 직선 조준 및 놓은 적 시전에 전달한다.</summary>
+    private void UpdateCastInput(Vector2 position, bool released)
+    {
+        int spell = _castSource;
+        Vector2 point = released ? _upPosition : position;
+        if (!_isCastDragging && (point - _downPosition).sqrMagnitude >= 36f)
+        {
+            _isCastDragging = true; _ui.BeginCastDrag(spell);
+        }
+        _pointer.position = point; _pointer.pressPosition = _downPosition;
+        if (_isCastDragging) _ui.PreviewCast(spell, _pointer);
+        if (!released) return;
+        bool dragged = _isCastDragging; _castSource = -1; _isCastDragging = false;
+        if (dragged) _ui.DropCast(spell, _pointer);
+        else if (RectTransformUtility.RectangleContainsScreenPoint(_screen.CastButtons[spell].Rect, point, null)) _ui.ClickCast(spell);
+    }
+
+    /// <summary>도안 핸들 드래그와 회전을 3D 격자 좌표의 기존 도안 이동 로직에 전달한다.</summary>
+    private void UpdateTemplateInput(Vector2 position, bool released, int rotations)
+    {
+        Vector2 point = released ? _upPosition : position;
+        if (!_isTemplateDragging && (point - _downPosition).sqrMagnitude >= 36f)
+        {
+            _screen.Board.BeginPatternDrag(_dragTemplate, Vector2Int.zero); _isTemplateDragging = true;
+        }
+        if (_isTemplateDragging)
+        {
+            _pointer.position = point; _pointer.pressPosition = _downPosition;
+            _screen.Board.PreviewPattern(_pointer);
+            for (int i = 0; i < rotations; i++) _screen.Board.RotatePatternDrag();
+        }
+        if (!released) return;
+        bool dragged = _isTemplateDragging; _dragTemplate = -1; _isTemplateDragging = false;
+        if (dragged) _screen.Board.EndPatternDrag(_pointer);
+    }
+
+    /// <summary>판에서 벗어나거나 UI로 포인터가 이동했을 때 테이블이 띄운 설명만 닫는다.</summary>
+    private void HideHover(Vector2 pointer)
+    {
+        if (_hadTableHover) { _ui.ShowPieceTooltip(null, pointer); _hadTableHover = false; }
+    }
+
+    /// <summary>포인터가 기존 클릭·드래그 UI를 가리키는지 확인해 3D 집기와 중복되지 않게 한다.</summary>
+    private bool IsOverControl(Vector2 position)
+    {
+        _pointer.position = position; _uiHits.Clear(); EventSystem.current.RaycastAll(_pointer, _uiHits);
+        foreach (RaycastResult hit in _uiHits)
+            if (ExecuteEvents.GetEventHandler<IPointerClickHandler>(hit.gameObject) != null || ExecuteEvents.GetEventHandler<IBeginDragHandler>(hit.gameObject) != null) return true;
+        return false;
+    }
+
+    /// <summary>소수 격자 위치가 판 안에 있는지 반환한다.</summary>
+    private bool OnGrid(Vector2 grid) { return grid.x >= 0 && grid.x < _layout.Columns && grid.y >= 0 && grid.y < _layout.Rows; }
+
+    /// <summary>칸 중심에서 포인터가 향한 상·우·하·좌 삼각 구역을 반환한다.</summary>
+    private static int Sector(Vector2 grid)
+    {
+        float x = grid.x - Mathf.Floor(grid.x) - 0.5f, y = grid.y - Mathf.Floor(grid.y) - 0.5f;
+        return Mathf.Abs(x) > Mathf.Abs(y) ? (x > 0 ? 1 : 3) : (y > 0 ? 2 : 0);
+    }
+
+    /// <summary>조각의 현재 물리 각도와 가장 가까운 배치 가능 방향으로 확대해 집는다.</summary>
+    private void BeginPick(SpellPiece3D piece, Vector2 pointer)
+    {
+        _picked = piece; _pressPosition = pointer; _isHolding = true; _isClickSelected = false;
+        float yaw = piece.transform.eulerAngles.y, nearest = float.PositiveInfinity;
+        _rotation = Mathf.RoundToInt(yaw / 90f) % 4;
+        // 판에 놓인 조각은 메시가 방향을 담고 있으므로 놓인 방향 그대로 집는다.
+        if (!piece.IsHand) { _layout.PieceToGrid(piece.Board, piece.Placement, out Vector2Int _, out _rotation); nearest = 0; }
+        for (int r = 0; r < 4 && piece.IsHand; r++)
+        {
+            bool valid = false;
+            foreach (int spell in _game.Spells) for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
+            {
+                _layout.GridToLocalPlacement(spell, piece.Card.Shape, new Vector2Int(x, y), r, out Vector2Int local, out int localRotation);
+                if (_layout.IsPlaced(spell) && _game.CanPlace(spell, piece.Card, local.x, local.y, localRotation, piece.Board == spell ? piece.Placement : null)) valid = true;
+            }
+            float delta = Mathf.Abs(Mathf.DeltaAngle(yaw, r * 90f));
+            if (valid && delta < nearest) { _rotation = r; nearest = delta; }
+        }
+        _picked.Pick(_cellSize, HeldCells()); HideHover(pointer); PreviewPick(pointer);
+    }
+
+    /// <summary>포인터에 가장 가까운 격자 앵커를 찾고 배치 가능 여부를 조각 색으로 표시한다.</summary>
+    private void PreviewPick(Vector2 pointer)
+    {
+        _destination = -1;
+        if (!ScreenToGrid(pointer, out Vector2 grid)) return;
+        IReadOnlyList<SpellGame.ShapeCell> cells = HeldCells();
+        Vector2 offset = SpellPiece3D.CellBounds(cells) / 2;
+        _anchor = new Vector2Int(Mathf.RoundToInt(grid.x - offset.x), Mathf.RoundToInt(grid.y - offset.y));
+        if (OnGrid(grid))
+        {
+            foreach (int spell in _game.Spells)
+            {
+                if (!_layout.IsPlaced(spell)) continue;
+                _layout.GridToLocalPlacement(spell, _picked.Card.Shape, _anchor, _rotation, out Vector2Int local, out int localRotation);
+                if (!_game.CanPlace(spell, _picked.Card, local.x, local.y, localRotation, _picked.Board == spell ? _picked.Placement : null)) continue;
+                _destination = spell; _local = local; _localRotation = localRotation; break;
+            }
+            _picked.transform.position = PiecePosition(_anchor, cells, 0.045f) + Vector3.up * 0.22f;
+        }
+        else _picked.transform.position = _boardRoot.TransformPoint(GridLocal(grid, 0.42f));
+        _picked.transform.rotation = Quaternion.identity;
+        _picked.SetTint(_destination >= 0 ? new Color(0.55f, 0.95f, 0.68f) : new Color(1f, 0.5f, 0.4f));
+    }
+
+    /// <summary>유효한 도안에는 배치·이동하고 손패 영역에는 회수한다. 실패하면 원위치로 복구한다.</summary>
+    private void FinishPick(Vector2 pointer)
+    {
+        PreviewPick(pointer); SpellPiece3D piece = _picked; bool changed = false;
+        if (_destination >= 0)
+            changed = piece.IsHand ? _game.Place(_destination, piece.Card, _local.x, _local.y, _localRotation) : _game.Move(piece.Board, piece.Placement, _destination, _local.x, _local.y, _localRotation);
+        else if (!piece.IsHand)
+        {
+            Ray ray = _camera.ScreenPointToRay(pointer); new Plane(Vector3.up, _handRoot.position).Raycast(ray, out float distance);
+            Vector3 local = _handRoot.InverseTransformPoint(ray.GetPoint(distance));
+            if (Mathf.Abs(local.x) < _handSurface.localScale.x * 0.5f && Mathf.Abs(local.z) < _handSurface.localScale.z * 0.5f) changed = _game.Recall(piece.Board, piece.Placement);
+        }
+        _picked = null; _isClickSelected = _isHolding = false;
+        if (changed) _ui.TableChanged(); else RestorePiece(piece);
+    }
+
+    /// <summary>취소한 조각을 모델 위치로 복원하고 손패 조각은 예약 자리에서 다시 내려놓는다.</summary>
+    private void RestorePiece(SpellPiece3D piece)
+    {
+        if (piece.IsHand) piece.DropToHand(piece.Slot, SlotPosition(piece.Slot), _cellSize, 0.25f);
+        else PlaceOnBoard(piece, piece.Board, piece.Placement);
+    }
+
+    /// <summary>모델을 바꾸지 않고 진행 중인 집기를 취소하며 물리 상태를 복구한다.</summary>
+    public void CancelPick()
+    {
+        if (_picked == null) return;
+        SpellPiece3D piece = _picked; _picked = null; _isClickSelected = _isHolding = false; RestorePiece(piece);
+    }
+
+    /// <summary>기존 도안 드래그 입력의 스냅 후보를 3D 판 위의 유효·실패 색 외곽선으로 표시한다.</summary>
+    private void RefreshTemplatePreview()
+    {
+        SpellBoardGraphic board = _screen.Board; int spell = board.PreviewPatternIndex;
+        if (spell == _previewPattern && board.PreviewOrigin == _previewOrigin && board.PreviewRotation == _previewRotation) return;
+        _previewPattern = spell; _previewOrigin = board.PreviewOrigin; _previewRotation = board.PreviewRotation;
+        ClearGeometry(_preview);
+        if (spell < 0) return;
+        bool valid = _layout.MoveIssue(spell, _previewOrigin, _previewRotation, _game.Spells) == null;
+        Material color = new Material(_lineMaterial) { color = valid ? new Color(0.4f, 0.95f, 0.6f) : new Color(1, 0.3f, 0.3f) };
+        DrawPattern(_preview, spell, _previewOrigin, _previewRotation, color, color);
+    }
+
+    void OnDisable()
+    {
+        if (_pickAction != null) _pickAction.Disable();
+        if (_rotateAction != null) _rotateAction.Disable();
+        _requestedRotations = 0;
+        _hasPress = _hasRelease = false;
+        CancelPick(); if (_world != null) _world.gameObject.SetActive(false);
+    }
+
+    void OnEnable()
+    {
+        if (_pickAction != null) _pickAction.Enable();
+        if (_rotateAction != null) _rotateAction.Enable();
+    }
+
+    void OnDestroy()
+    {
+        if (_world != null) { ClearGeometry(_patterns); ClearGeometry(_preview); Destroy(_world.gameObject); }
+        foreach (Material material in _materials) if (material != null) Destroy(material);
+        if (_physicsMaterial != null) Destroy(_physicsMaterial);
+        if (_pickAction != null) { _pickAction.performed -= RecordPress; _pickAction.canceled -= RecordRelease; _pickAction.Dispose(); }
+        if (_rotateAction != null) { _rotateAction.performed -= RecordRotation; _rotateAction.Dispose(); }
+    }
+}

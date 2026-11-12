@@ -1,29 +1,91 @@
-﻿using UnityEngine;
+using System.Collections.Generic;
+
+using UnityEngine;
 using UnityEngine.EventSystems;
 
-/// <summary>공유 격자와 도안 외곽선, 조각 및 배치 미리 보기를 그린다.</summary>
+/// <summary>공유 격자와 도안 외곽선, 조각 및 배치·도안 이동 미리 보기를 1/4 구역 단위로 그리고 입력을 전달한다.</summary>
 public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointerClickHandler, IPointerMoveHandler, IPointerExitHandler, IBeginDragHandler, IDragHandler, IEndDragHandler
 {
+    private const float CELL_GAP = 3f;
+    private const float OUTLINE_WIDTH = 5f;
+    private const float PREVIEW_INSET = 5f;
+    private const float PREVIEW_WIDTH = 3f;
+
+    [Header("칸")]
+    [SerializeField] private float _cellSize = 120f;
+
+    [Header("격자 색")]
+    [SerializeField] private Color _emptyColor = new Color(0.078f, 0.102f, 0.188f);
+    [SerializeField] private Color _requiredColor = new Color(0.365f, 0.424f, 0.596f);
+    [SerializeField] private Color _targetColor = new Color(0.306f, 0.541f, 0.494f);
+    [SerializeField] private Color _validColor = new Color(0.482f, 0.878f, 0.627f);
+    [SerializeField] private Color _invalidColor = new Color(0.878f, 0.376f, 0.353f);
+    [SerializeField] private Color _guideColor = new Color(0.165f, 0.2f, 0.337f, 0.9f);
+
+    [Header("조각 색")]
+    [SerializeField] private Color _normalPieceColor = new Color(0.725f, 0.769f, 0.808f);
+    [SerializeField] private Color _flameColor = new Color(0.878f, 0.478f, 0.247f);
+    [SerializeField] private Color _guardColor = new Color(0.31f, 0.584f, 0.839f);
+    [SerializeField] private Color _resonanceColor = new Color(0.655f, 0.467f, 0.851f);
+    [SerializeField] private Color _afterimageColor = new Color(0.333f, 0.78f, 0.702f);
+    [SerializeField] private Color _persistedAfterimageColor = new Color(0.18f, 0.435f, 0.4f);
+
+    private bool[] _targets = new bool[0];
+    private readonly Vector2[] _corners = new Vector2[4];
     private SpellGameUI _ui;
     private SpellGame _game;
+    private SpellPatternLayout _layout;
+
     private int _hoverX = -1;
     private int _hoverY = -1;
-    private int _dragPattern = -1;
-    private Vector2Int _dragOffset;
+    private int _hoverSector;
+
     private bool _dragPiece;
     private Vector2Int _pieceOffset;
-    private int _previewPattern = -1;
+
+    private int _dragPattern = -1;
+    private int _dragRotation;
+    private Vector2Int _grabLocal;
+    private bool _hasPatternPreview;
     private Vector2Int _previewOrigin;
+    private Vector2 _ghostTopLeft;
+    private PointerEventData _lastPatternData;
 
-    public bool IsDragging { get { return _dragPiece || _dragPattern >= 0; } }
+    private bool _targetsDirty = true;
+    private SpellGame.Card _targetsCard;
+    private int _targetsRotation = -1;
 
-    /// <summary>표시할 게임 상태를 설정한다.</summary>
-    public void Setup(SpellGameUI ui, SpellGame game) { _ui = ui; _game = game; SetVerticesDirty(); }
+    public bool IsDragging { get { return _dragPiece || IsDraggingPattern; } }
+    public bool IsDraggingPattern { get { return _dragPattern >= 0; } }
+    public float CellSize { get { return _cellSize; } }
+    public int PreviewPatternIndex { get { return _hasPatternPreview ? _dragPattern : -1; } }
+    public Vector2Int PreviewOrigin { get { return _previewOrigin; } }
+    public int PreviewRotation { get { return _dragRotation; } }
 
-    /// <summary>도형이 지정 칸에서 차지하는 삼각 구역 마스크를 반환한다.</summary>
+    /// <summary>표시할 게임 상태와 도안 배치를 설정한다.</summary>
+    public void Setup(SpellGameUI ui, SpellGame game, SpellPatternLayout layout)
+    {
+        _ui = ui; _game = game; _layout = layout; _targetsDirty = true; SetVerticesDirty();
+    }
+
+    /// <summary>도형이 지정 칸에서 차지하는 삼각 구역 마스크를 반환한다. 좌표와 회전은 같은 기준(격자 또는 도안)을 쓴다.</summary>
     private static int CellMask(SpellGame.Card card, int x, int y, int rotation, int cellX, int cellY)
     {
-        return SpellGame.CellMask(card, rotation, cellX - x, cellY - y);
+        return SpellGame.ShapeMaskAt(card.Shape, x, y, rotation, cellX, cellY);
+    }
+
+    /// <summary>배치 조각의 효과에 맞는 표시 색을 반환한다.</summary>
+    private Color PieceColor(SpellGame.Placement piece)
+    {
+        switch (piece.Card.Effect)
+        {
+            case SpellGame.Effect.Flame: return _flameColor;
+            case SpellGame.Effect.Guard: return _guardColor;
+            case SpellGame.Effect.Resonance: return _resonanceColor;
+            case SpellGame.Effect.Afterimage: return piece.HasPersisted ? _persistedAfterimageColor : _afterimageColor;
+            case SpellGame.Effect.None: return _normalPieceColor;
+            default: return _ui.EffectColor(piece.Card.Effect);
+        }
     }
 
     /// <summary>선분에 두께를 주어 격자 경계 또는 도형 경계를 그린다.</summary>
@@ -35,77 +97,152 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
         vh.AddTriangle(start, start + 1, start + 2); vh.AddTriangle(start, start + 2, start + 3);
     }
 
-    /// <summary>3행 6열의 도안, 배치 조각 및 굵은 도안 경계를 그린다.</summary>
+    /// <summary>삼각 구역 하나를 채운다.</summary>
+    private static void Sector(UnityEngine.UI.VertexHelper vh, Vector2 center, Vector2 a, Vector2 b, Color color)
+    {
+        int start = vh.currentVertCount; UIVertex v = UIVertex.simpleVert; v.color = color;
+        v.position = center; vh.AddVert(v); v.position = a; vh.AddVert(v); v.position = b; vh.AddVert(v); vh.AddTriangle(start, start + 1, start + 2);
+    }
+
+    /// <summary>격자 왼쪽 위를 기준으로 한 픽셀 위치(x 오른쪽, y 아래)의 칸 모서리와 중심을 계산해 _corners에 채운다.</summary>
+    private Vector2 CellGeometry(float left, float down, float inset)
+    {
+        Rect rect = rectTransform.rect;
+        float l = rect.xMin + left + inset, r = rect.xMin + left + _cellSize - CELL_GAP - inset;
+        float top = rect.yMax - down - inset, bottom = rect.yMax - down - _cellSize + CELL_GAP + inset;
+        _corners[0] = new Vector2(l, top); _corners[1] = new Vector2(r, top); _corners[2] = new Vector2(r, bottom); _corners[3] = new Vector2(l, bottom);
+        return new Vector2((l + r) / 2, (top + bottom) / 2);
+    }
+
+    /// <summary>구역 경계 한 변을 그린다. direction 0과 1은 중심에서 모서리로, 2는 바깥 변이다.</summary>
+    private void EdgeLine(UnityEngine.UI.VertexHelper vh, Vector2 center, int sector, int direction, float thickness, Color color)
+    {
+        if (direction == 0) Line(vh, center, _corners[(sector + 1) % 4], thickness, color);
+        else if (direction == 1) Line(vh, center, _corners[sector], thickness, color);
+        else Line(vh, _corners[sector], _corners[(sector + 1) % 4], thickness, color);
+    }
+
+    /// <summary>3행 6열의 도안 구역, 배치 조각, 배치 가능 구역, 미리 보기와 도안 경계를 그린다.</summary>
     protected override void OnPopulateMesh(UnityEngine.UI.VertexHelper vh)
     {
         vh.Clear(); if (_game == null) return;
-        const float size = 72;
-        int hoverBoard, hoverLocalX, hoverLocalY;
-        bool hoverMapped = _ui.MapCell(_hoverX, _hoverY, out hoverBoard, out hoverLocalX, out hoverLocalY);
-        bool preview = hoverMapped && _ui.SelectedCard != null;
-        bool valid = preview && _ui.CanPreview(hoverBoard, hoverLocalX, hoverLocalY);
-        for (int y = 0; y < 3; y++) for (int x = 0; x < 6; x++)
+        IReadOnlyList<int> owned = _game.Spells;
+        UpdateTargets();
+        SpellGame.Card selected = _ui.SelectedCard;
+        int hoverSpell = -1;
+        bool preview = !IsDraggingPattern && selected != null && _hoverX >= 0 && _layout.TryFindTarget(_hoverX, _hoverY, _hoverSector, owned, out hoverSpell);
+        bool valid = preview && _ui.CanPreviewGrid(hoverSpell, new Vector2Int(_hoverX, _hoverY));
+        for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
         {
-            int board, lx, ly; bool active = _ui.MapCell(x, y, out board, out lx, out ly);
-            float l = x * size, r = l + size - 3, top = -y * size, bottom = top - size + 3;
-            Vector2 center = new Vector2((l + r) / 2, (top + bottom) / 2);
-            Vector2[] corners = { new Vector2(l, top), new Vector2(r, top), new Vector2(r, bottom), new Vector2(l, bottom) };
+            Vector2 center = CellGeometry(x * _cellSize, y * _cellSize, 0);
             for (int sector = 0; sector < 4; sector++)
             {
-                bool allowed = active && (SpellGame.PatternMask(board, lx, ly) & (1 << sector)) != 0;
-                Color color = allowed ? new Color(0.31f, 0.37f, 0.42f) : new Color(0.12f, 0.15f, 0.18f);
-                if (active) foreach (SpellGame.Placement p in _game.Boards[board].Pieces)
+                Color color = _emptyColor;
+                int owner;
+                if (_layout.TryFindOwner(x, y, sector, owned, out owner))
                 {
-                    if ((CellMask(p.Card, p.X, p.Y, p.Rotation, lx, ly) & (1 << sector)) == 0) continue;
-                    color = SpellGame.EffectCount(p.Card, SpellGame.Effect.Flame) > 0 ? new Color(0.85f, 0.42f, 0.2f) : SpellGame.EffectCount(p.Card, SpellGame.Effect.Guard) > 0 ? new Color(0.28f, 0.55f, 0.8f) : SpellGame.EffectCount(p.Card, SpellGame.Effect.Resonance) > 0 ? new Color(0.65f, 0.40f, 0.8f) : SpellGame.EffectCount(p.Card, SpellGame.Effect.Afterimage) > 0 ? p.HasPersisted ? new Color(0.18f, 0.43f, 0.41f) : new Color(0.31f, 0.76f, 0.68f) : new Color(0.68f, 0.73f, 0.75f);
-                    if (_game.IsCursed(p.Card)) color = Color.red;
+                    color = _targets[(y * _layout.Columns + x) * 4 + sector] ? _targetColor : _requiredColor;
+                    Vector2Int local; int localSector;
+                    _layout.GridToLocal(owner, x, y, sector, out local, out localSector);
+                    IReadOnlyList<SpellGame.Placement> pieces = _game.Boards[owner].Pieces;
+                    for (int i = 0; i < pieces.Count; i++)
+                        if ((pieces[i].CellMask(local.x, local.y) & (1 << localSector)) != 0) color = PieceColor(pieces[i]);
                 }
-                if (preview && board == hoverBoard && (CellMask(_ui.SelectedCard, hoverLocalX, hoverLocalY, _ui.Rotation, lx, ly) & (1 << sector)) != 0) color = valid ? new Color(0.55f, 0.87f, 0.66f) : new Color(0.9f, 0.3f, 0.3f);
-                int start = vh.currentVertCount; UIVertex v = UIVertex.simpleVert; v.color = color;
-                v.position = center; vh.AddVert(v); v.position = corners[sector]; vh.AddVert(v); v.position = corners[(sector + 1) % 4]; vh.AddVert(v); vh.AddTriangle(start, start + 1, start + 2);
-                if (active) foreach (SpellGame.Placement piece in _game.Boards[board].Pieces)
-                {
-                    if (!_game.IsCursed(piece.Card) || (CellMask(piece.Card, piece.X, piece.Y, piece.Rotation, lx, ly) & (1 << sector)) == 0) continue;
-                    Color curseColor = Color.red;
-                    Line(vh, center, corners[sector], 4, curseColor);
-                    Line(vh, corners[sector], corners[(sector + 1) % 4], 4, curseColor);
-                    Line(vh, corners[(sector + 1) % 4], center, 4, curseColor);
-                }
+                if (preview && (CellMask(selected, _hoverX, _hoverY, _ui.Rotation, x, y) & (1 << sector)) != 0) color = valid ? _validColor : _invalidColor;
+                Sector(vh, center, _corners[sector], _corners[(sector + 1) % 4], color);
             }
-            for (int side = 0; side < 4; side++) Line(vh, center, corners[side], 1.2f, new Color(0.08f, 0.11f, 0.14f, 0.75f));
-            if (!active) continue;
-            int patternMask = SpellGame.PatternMask(board, lx, ly);
+            Color gridColor = Color.Lerp(_guideColor, Color.white, 0.35f);
+            gridColor.a = 1f;
             for (int side = 0; side < 4; side++)
             {
-                if ((patternMask & (1 << side)) == 0) continue;
-                if ((patternMask & (1 << ((side + 3) % 4))) == 0) Line(vh, corners[side], center, 5, _ui.PatternColor(board));
-                if ((patternMask & (1 << ((side + 1) % 4))) == 0) Line(vh, center, corners[(side + 1) % 4], 5, _ui.PatternColor(board));
-                int nx = x + (side == 1 ? 1 : side == 3 ? -1 : 0), ny = y + (side == 2 ? 1 : side == 0 ? -1 : 0);
-                int other, ox, oy;
-                if (!_ui.MapCell(nx, ny, out other, out ox, out oy) || other != board || (SpellGame.PatternMask(other, ox, oy) & (1 << ((side + 2) % 4))) == 0)
-                    Line(vh, corners[side], corners[(side + 1) % 4], 5, _ui.PatternColor(board));
+                Line(vh, center, _corners[side], 1.2f, gridColor);
+                Line(vh, _corners[side], _corners[(side + 1) % 4], 1.2f, gridColor);
             }
-        }
-        if (_previewPattern >= 0)
-        {
-            Color color = _ui.CanMovePattern(_previewPattern, _previewOrigin) ? new Color(0.45f, 1f, 0.65f) : new Color(1f, 0.3f, 0.3f);
-            foreach (Vector2Int cell in _ui.PatternCells(_previewPattern))
+            for (int sector = 0; sector < 4; sector++)
             {
-                Vector2Int pos = _previewOrigin + cell;
-                if (pos.x < 0 || pos.x >= 6 || pos.y < 0 || pos.y >= 3) continue;
-                float l = pos.x * size + 5, r = l + size - 13, top = -pos.y * size - 5, bottom = top - size + 13;
-                Vector2 center = new Vector2((l + r) / 2, (top + bottom) / 2);
-                Vector2[] corners = { new Vector2(l, top), new Vector2(r, top), new Vector2(r, bottom), new Vector2(l, bottom) };
-                int mask = SpellGame.PatternMask(_previewPattern, cell.x, cell.y);
-                for (int side = 0; side < 4; side++)
+                int owner;
+                if (!_layout.TryFindOwner(x, y, sector, owned, out owner)) continue;
+                for (int direction = 0; direction < 3; direction++)
                 {
-                    if ((mask & (1 << side)) == 0) continue;
-                    if ((mask & (1 << ((side + 3) % 4))) == 0) Line(vh, corners[side], center, 3, color);
-                    if ((mask & (1 << ((side + 1) % 4))) == 0) Line(vh, center, corners[(side + 1) % 4], 3, color);
-                    Line(vh, corners[side], corners[(side + 1) % 4], 3, color);
+                    int nx, ny, nSector, neighbor;
+                    SpellPatternLayout.Neighbor(x, y, sector, direction, out nx, out ny, out nSector);
+                    bool same = nx >= 0 && nx < _layout.Columns && ny >= 0 && ny < _layout.Rows && _layout.TryFindOwner(nx, ny, nSector, owned, out neighbor) && neighbor == owner;
+                    if (!same) EdgeLine(vh, center, sector, direction, OUTLINE_WIDTH, _ui.PatternColor(owner));
                 }
             }
         }
+        if (IsDraggingPattern && _hasPatternPreview)
+        {
+            bool movable = _layout.MoveIssue(_dragPattern, _previewOrigin, _dragRotation, owned) == null;
+            Color ghost = _ui.PatternColor(_dragPattern);
+            DrawPatternShape(vh, _dragPattern, _dragRotation, new Vector2(_previewOrigin.x * _cellSize, _previewOrigin.y * _cellSize), PREVIEW_INSET, null, movable ? _validColor : _invalidColor, PREVIEW_WIDTH);
+            DrawPatternShape(vh, _dragPattern, _dragRotation, _ghostTopLeft, 0, new Color(ghost.r, ghost.g, ghost.b, 0.28f), new Color(ghost.r, ghost.g, ghost.b, 0.9f), PREVIEW_WIDTH);
+        }
+    }
+
+    /// <summary>회전된 도안 모양을 지정 픽셀 위치에 채우기와 외곽선으로 그린다.</summary>
+    private void DrawPatternShape(UnityEngine.UI.VertexHelper vh, int spell, int rotation, Vector2 topLeft, float inset, Color? fill, Color line, float thickness)
+    {
+        Vector2Int size = SpellPatternLayout.RotatedSize(spell, rotation);
+        for (int y = 0; y < size.y; y++) for (int x = 0; x < size.x; x++)
+        {
+            int mask = SpellPatternLayout.GridMask(spell, Vector2Int.zero, rotation, x, y);
+            if (mask == 0) continue;
+            Vector2 center = CellGeometry(topLeft.x + x * _cellSize, topLeft.y + y * _cellSize, inset);
+            for (int sector = 0; sector < 4; sector++)
+            {
+                if ((mask & (1 << sector)) == 0) continue;
+                if (fill.HasValue) Sector(vh, center, _corners[sector], _corners[(sector + 1) % 4], fill.Value);
+                for (int direction = 0; direction < 3; direction++)
+                {
+                    int nx, ny, nSector;
+                    SpellPatternLayout.Neighbor(x, y, sector, direction, out nx, out ny, out nSector);
+                    if ((SpellPatternLayout.GridMask(spell, Vector2Int.zero, rotation, nx, ny) & (1 << nSector)) == 0) EdgeLine(vh, center, sector, direction, thickness, line);
+                }
+            }
+        }
+    }
+
+    /// <summary>선택 조각을 현재 회전으로 놓을 수 있는 구역 표시를 필요할 때만 다시 계산한다.</summary>
+    private void UpdateTargets()
+    {
+        SpellGame.Card card = IsDraggingPattern ? null : _ui.SelectedCard;
+        int rotation = _ui.Rotation;
+        if (!_targetsDirty && card == _targetsCard && rotation == _targetsRotation) return;
+        _targetsDirty = false; _targetsCard = card; _targetsRotation = rotation;
+        if (_targets.Length != _layout.Columns * _layout.Rows * 4) _targets = new bool[_layout.Columns * _layout.Rows * 4];
+        System.Array.Clear(_targets, 0, _targets.Length);
+        if (card == null) return;
+        IReadOnlyList<int> owned = _game.Spells;
+        for (int i = 0; i < owned.Count; i++)
+        {
+            if (!_layout.IsPlaced(owned[i])) continue;
+            for (int ay = 0; ay < _layout.Rows; ay++) for (int ax = 0; ax < _layout.Columns; ax++)
+            {
+                if (!_ui.CanPreviewGrid(owned[i], new Vector2Int(ax, ay))) continue;
+                for (int y = ay; y <= Mathf.Min(ay + 1, _layout.Rows - 1); y++) for (int x = ax; x <= Mathf.Min(ax + 1, _layout.Columns - 1); x++)
+                {
+                    int mask = CellMask(card, ax, ay, rotation, x, y);
+                    for (int sector = 0; sector < 4; sector++) if ((mask & (1 << sector)) != 0) _targets[(y * _layout.Columns + x) * 4 + sector] = true;
+                }
+            }
+        }
+    }
+
+    /// <summary>게임 상태가 바뀌어 배치 가능 구역을 다시 계산해야 함을 표시한다.</summary>
+    public void MarkStateDirty() { _targetsDirty = true; SetVerticesDirty(); }
+
+    /// <summary>화면 좌표를 격자 왼쪽 위 기준 픽셀 좌표(x 오른쪽, y 아래)로 바꾼다.</summary>
+    private bool ToGridPixels(PointerEventData data, Vector2 position, out Vector2 pixels)
+    {
+        if (_ui.IsTableActive)
+        {
+            bool mapped = _ui.TryTableGrid(position, out Vector2 grid);
+            pixels = grid * _cellSize; return mapped;
+        }
+        Vector2 p; pixels = Vector2.zero;
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rectTransform, position, data.pressEventCamera, out p)) return false;
+        Rect rect = rectTransform.rect; pixels = new Vector2(p.x - rect.xMin, rect.yMax - p.y); return true;
     }
 
     /// <summary>화면 좌표를 공유 격자 좌표와 삼각 구역으로 변환한다.</summary>
@@ -117,45 +254,73 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     /// <summary>지정 화면 좌표를 격자 칸과 삼각 구역으로 변환한다.</summary>
     private bool GetCellAt(PointerEventData data, Vector2 position, out int x, out int y, out int sector)
     {
-        x = y = sector = 0; Vector2 p;
-        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rectTransform, position, data.pressEventCamera, out p)) return false;
-        Rect rect = rectTransform.rect; float u = (p.x - rect.xMin) / 72, v = (rect.yMax - p.y) / 72;
-        if (u < 0 || u >= 6 || v < 0 || v >= 3) return false;
+        x = y = sector = 0; Vector2 pixels;
+        if (!ToGridPixels(data, position, out pixels)) return false;
+        float u = pixels.x / _cellSize, v = pixels.y / _cellSize;
+        if (u < 0 || u >= _layout.Columns || v < 0 || v >= _layout.Rows) return false;
         x = (int)u; y = (int)v; float dx = u - x - 0.5f, dy = v - y - 0.5f;
         sector = Mathf.Abs(dx) > Mathf.Abs(dy) ? (dx > 0 ? 1 : 3) : (dy > 0 ? 2 : 0); return true;
     }
 
-    /// <summary>드롭 좌표가 도안에 속하면 해당 칸에 조각을 배치한다.</summary>
+    /// <summary>드롭 좌표가 도안에 속하면 그 칸을 앵커로 조각을 배치한다.</summary>
     public bool TryDrop(PointerEventData data)
     {
-        int x, y, sector, board, lx, ly;
-        if (!GetCell(data, out x, out y, out sector) || !_ui.MapCell(x, y, out board, out lx, out ly)) return false;
-        _ui.ClickGrid(board, lx, ly); return true;
+        int x, y, sector, spell;
+        if (!GetCell(data, out x, out y, out sector) || !_layout.TryFindTarget(x, y, sector, _game.Spells, out spell)) return false;
+        _ui.ClickGrid(spell, new Vector2Int(x, y)); return true;
     }
 
-    /// <summary>목록에서 드래그한 도안을 격자의 지정 위치로 옮긴다.</summary>
-    public bool DropPattern(PointerEventData data, int pattern)
+    /// <summary>도안 이동을 시작한다. grabRotated는 회전된 도안 범위 안에서 잡은 칸이다.</summary>
+    public void BeginPatternDrag(int pattern, Vector2Int grabRotated)
     {
-        int x, y, sector; if (!GetCell(data, out x, out y, out sector)) return false;
-        _ui.MovePattern(pattern, new Vector2Int(x, y)); return true;
+        if (!_ui.CanMovePattern(pattern)) { _ui.SetPatternHint("고정된 조각이 있는 도안은 이동할 수 없습니다"); return; }
+        _dragPattern = pattern; _dragRotation = _layout.Rotation(pattern);
+        _grabLocal = SpellPatternLayout.UnrotateLocal(pattern, _dragRotation, grabRotated);
+        _hasPatternPreview = false; _hoverX = _hoverY = -1;
+        SetVerticesDirty();
     }
 
-    /// <summary>드래그 중인 도안의 위치와 배치 가능 여부를 미리 표시한다.</summary>
-    public void PreviewPattern(PointerEventData data, int pattern, Vector2Int offset)
+    /// <summary>드래그 중인 도안의 고스트를 포인터에 붙이고, 잡은 칸 기준 스냅 위치의 가능 여부를 표시한다.</summary>
+    public void PreviewPattern(PointerEventData data)
     {
-        int x, y, sector;
-        _previewPattern = GetCell(data, out x, out y, out sector) ? pattern : -1;
-        _previewOrigin = new Vector2Int(x, y) - offset; SetVerticesDirty();
+        if (!IsDraggingPattern) return;
+        _lastPatternData = data;
+        Vector2 pixels;
+        if (!ToGridPixels(data, data.position, out pixels)) return;
+        Vector2Int grab = SpellPatternLayout.RotateLocal(_dragPattern, _dragRotation, _grabLocal);
+        Vector2Int cell = new Vector2Int(Mathf.FloorToInt(pixels.x / _cellSize), Mathf.FloorToInt(pixels.y / _cellSize));
+        _previewOrigin = cell - grab;
+        _ghostTopLeft = pixels - new Vector2((grab.x + 0.5f) * _cellSize, (grab.y + 0.5f) * _cellSize);
+        _hasPatternPreview = true;
+        _ui.SetPatternHint(_layout.MoveIssue(_dragPattern, _previewOrigin, _dragRotation, _game.Spells));
+        SetVerticesDirty();
     }
 
-    /// <summary>도안 이동 미리 보기를 지운다.</summary>
-    public void ClearPatternPreview() { _previewPattern = -1; SetVerticesDirty(); }
+    /// <summary>들고 있는 도안을 시계 방향으로 90도 돌리고 미리 보기를 갱신한다.</summary>
+    public void RotatePatternDrag()
+    {
+        if (!IsDraggingPattern) return;
+        _dragRotation = (_dragRotation + 1) % 4;
+        if (_lastPatternData != null) PreviewPattern(_lastPatternData); else SetVerticesDirty();
+    }
+
+    /// <summary>도안 이동을 끝내고 격자 위면 스냅 위치·회전으로 옮긴다. 불가하면 원래 위치·방향을 유지한다.</summary>
+    public void EndPatternDrag(PointerEventData data)
+    {
+        if (!IsDraggingPattern) return;
+        PreviewPattern(data);
+        int pattern = _dragPattern, rotation = _dragRotation; Vector2Int origin = _previewOrigin;
+        int x, y, sector; bool onGrid = GetCell(data, out x, out y, out sector);
+        _dragPattern = -1; _hasPatternPreview = false; _lastPatternData = null; _targetsDirty = true;
+        if (onGrid) _ui.MovePattern(pattern, origin, rotation);
+        else { _ui.SetPatternHint(null); SetVerticesDirty(); }
+    }
 
     /// <summary>현재 커서 칸에서 회전된 조각의 배치 안내와 그래픽을 즉시 갱신한다.</summary>
     public void RefreshPreview()
     {
-        int board, x, y;
-        if (_ui.MapCell(_hoverX, _hoverY, out board, out x, out y)) _ui.SetPreviewHint(board, x, y);
+        int spell;
+        if (_hoverX >= 0 && _layout.TryFindTarget(_hoverX, _hoverY, _hoverSector, _game.Spells, out spell)) _ui.SetPreviewHint(spell, new Vector2Int(_hoverX, _hoverY));
         else _ui.SetOutsidePreviewHint();
         SetVerticesDirty();
     }
@@ -163,68 +328,119 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     /// <summary>화면 갱신이나 비활성화 시 조각과 도안의 진행 중 드래그를 취소한다.</summary>
     public void CancelDrag()
     {
-        _dragPiece = false; _dragPattern = -1; _previewPattern = -1; _hoverX = _hoverY = -1;
+        _dragPiece = false; _dragPattern = -1; _hasPatternPreview = false; _lastPatternData = null; _hoverX = _hoverY = -1;
         SetVerticesDirty();
+    }
+
+    /// <summary>포인터가 가리키는 칸·구역을 갱신하고, 바뀐 경우에만 안내와 그래픽을 다시 그린다.</summary>
+    private void UpdateHover(PointerEventData data)
+    {
+        int x, y, sector;
+        if (!GetCell(data, out x, out y, out sector)) { ClearHover(data); return; }
+        if (_dragPiece) { x -= _pieceOffset.x; y -= _pieceOffset.y; }
+        if (x == _hoverX && y == _hoverY && sector == _hoverSector) return;
+        _hoverX = x; _hoverY = y; _hoverSector = sector;
+        SpellGame.Card tooltip = null;
+        int spell;
+        if (_layout.TryFindTarget(x, y, sector, _game.Spells, out spell))
+        {
+            _ui.SetPreviewHint(spell, new Vector2Int(x, y));
+            if (!_dragPiece && _ui.SelectedCard == null) tooltip = PieceAt(x, y, sector)?.Card;
+            if (tooltip != null && tooltip.Effect == SpellGame.Effect.None) tooltip = null;
+        }
+        else _ui.SetOutsidePreviewHint();
+        if (_layout.TryFindTarget(x, y, sector, _game.Spells, out spell) && !_dragPiece && _ui.SelectedCard == null) _ui.ShowPatternTooltip(spell, data.position, tooltip);
+        else _ui.ShowPieceTooltip(null, data.position);
+        SetVerticesDirty();
+    }
+
+    /// <summary>가리킨 칸·구역 표시를 지운다.</summary>
+    private void ClearHover(PointerEventData data)
+    {
+        if (_hoverX < 0) return;
+        _hoverX = _hoverY = -1; _ui.ShowPieceTooltip(null, data.position); _ui.SetPreviewHint(-1, Vector2Int.zero); SetVerticesDirty();
+    }
+
+    /// <summary>격자 구역을 차지한 배치 조각을 찾는다. 없으면 null을 반환한다.</summary>
+    private SpellGame.Placement PieceAt(int x, int y, int sector)
+    {
+        int owner;
+        if (!_layout.TryFindOwner(x, y, sector, _game.Spells, out owner)) return null;
+        Vector2Int local; int localSector;
+        _layout.GridToLocal(owner, x, y, sector, out local, out localSector);
+        IReadOnlyList<SpellGame.Placement> pieces = _game.Boards[owner].Pieces;
+        for (int i = 0; i < pieces.Count; i++)
+            if ((pieces[i].CellMask(local.x, local.y) & (1 << localSector)) != 0) return pieces[i];
+        return null;
     }
 
     public void OnPointerMove(PointerEventData data)
     {
-        int x, y, sector, board, lx, ly;
-        if (GetCell(data, out x, out y, out sector)) { if (_dragPiece) { x -= _pieceOffset.x; y -= _pieceOffset.y; } _hoverX = x; _hoverY = y; if (_ui.MapCell(x, y, out board, out lx, out ly)) _ui.SetPreviewHint(board, lx, ly); else _ui.SetOutsidePreviewHint(); SetVerticesDirty(); }
+        if (!IsDraggingPattern) UpdateHover(data);
     }
+
     /// <summary>카드 드래그의 포인터 위치에 배치 미리 보기를 표시한다.</summary>
     public void PreviewCard(PointerEventData data)
     {
-        int x, y, sector;
-        if (GetCell(data, out x, out y, out sector)) OnPointerMove(data);
-        else OnPointerExit(data);
+        UpdateHover(data);
     }
-    public void OnPointerExit(PointerEventData data) { _hoverX = _hoverY = -1; _ui.SetPreviewHint(-1, -1, -1); SetVerticesDirty(); }
+
+    public void OnPointerExit(PointerEventData data) { ClearHover(data); }
+
     public void OnPointerClick(PointerEventData data)
     {
-        if (!_ui.CanInteract || !isActiveAndEnabled) return;
-        if (data.button != PointerEventData.InputButton.Left) return;
-        int x, y, sector, board, lx, ly;
+        if (data.button != PointerEventData.InputButton.Left || data.dragging) return;
+        int x, y, sector, spell;
         if (!GetCell(data, out x, out y, out sector)) return;
-        if (!_ui.MapCell(x, y, out board, out lx, out ly)) { _ui.SetOutsidePreviewHint(); return; }
-        if (_ui.SelectedCard == null)
-            foreach (SpellGame.Placement p in _game.Boards[board].Pieces)
-                if ((CellMask(p.Card, p.X, p.Y, p.Rotation, lx, ly) & (1 << sector)) != 0) { _ui.SelectPiece(board, p); return; }
-        _ui.ClickGrid(board, lx, ly);
+        if (!_layout.TryFindTarget(x, y, sector, _game.Spells, out spell)) { _ui.SetOutsidePreviewHint(); return; }
+        SpellGame.Placement piece = _ui.SelectedCard == null ? PieceAt(x, y, sector) : null;
+        int owner;
+        if (piece != null && _layout.TryFindOwner(x, y, sector, _game.Spells, out owner)) { _ui.SelectPiece(owner, piece); return; }
+        _ui.ClickGrid(spell, new Vector2Int(x, y));
     }
+
     public void OnBeginDrag(PointerEventData data)
     {
-        if (!_ui.CanInteract || !isActiveAndEnabled) return;
-        if (data.button != PointerEventData.InputButton.Left) return;
-        int x, y, sector, board, lx, ly;
-        if (!GetCellAt(data, data.pressPosition, out x, out y, out sector) || !_ui.MapCell(x, y, out board, out lx, out ly)) return;
-        foreach (SpellGame.Placement piece in _game.Boards[board].Pieces)
+        if (!_ui.CanInteract || !isActiveAndEnabled || data.button != PointerEventData.InputButton.Left) return;
+        int x, y, sector, spell;
+        if (!GetCellAt(data, data.pressPosition, out x, out y, out sector)) return;
+        SpellGame.Placement piece = PieceAt(x, y, sector);
+        int owner;
+        if (piece != null && _layout.TryFindOwner(x, y, sector, _game.Spells, out owner))
         {
-            if ((CellMask(piece.Card, piece.X, piece.Y, piece.Rotation, lx, ly) & (1 << sector)) == 0) continue;
-            _dragPiece = true; _pieceOffset = new Vector2Int(lx - piece.X, ly - piece.Y);
-            _ui.BeginPieceDrag(board, piece, data.position); return;
+            if (!_game.CanMovePiece(piece)) { _ui.SelectPiece(owner, piece); return; }
+            Vector2Int anchor; int gridRotation;
+            _layout.PieceToGrid(owner, piece, out anchor, out gridRotation);
+            _dragPiece = true; _pieceOffset = new Vector2Int(x, y) - anchor; _hoverX = _hoverY = -1;
+            _ui.BeginPieceDrag(owner, piece, data.position); return;
         }
-        if (_ui.SelectedCard == null) { _dragPattern = board; _dragOffset = new Vector2Int(lx, ly); }
+        if (_ui.SelectedCard == null && _layout.TryFindTarget(x, y, sector, _game.Spells, out spell))
+        {
+            BeginPatternDrag(spell, new Vector2Int(x, y) - _layout.Origin(spell));
+            PreviewPattern(data);
+        }
     }
+
     public void OnDrag(PointerEventData data)
     {
         if (!_ui.CanInteract || !isActiveAndEnabled) return;
         if (_dragPiece) { _ui.MoveCardDrag(data.position); PreviewCard(data); }
-        else if (_dragPattern >= 0) PreviewPattern(data, _dragPattern, _dragOffset);
+        else if (IsDraggingPattern) PreviewPattern(data);
     }
+
     public void OnEndDrag(PointerEventData data)
     {
         if (!_ui.CanInteract || !isActiveAndEnabled) return;
         if (_dragPiece)
         {
             _dragPiece = false;
-            int gx, gy, pieceSector, board = -1, lx = -1, ly = -1;
-            bool mapped = GetCell(data, out gx, out gy, out pieceSector) && _ui.MapCell(gx - _pieceOffset.x, gy - _pieceOffset.y, out board, out lx, out ly);
-            _ui.EndPieceDrag(data, mapped, board, lx, ly); return;
+            int gx, gy, pieceSector, spell = -1;
+            bool mapped = GetCell(data, out gx, out gy, out pieceSector);
+            Vector2Int anchor = new Vector2Int(gx, gy) - _pieceOffset;
+            mapped = mapped && _layout.TryFindTarget(anchor.x, anchor.y, pieceSector, _game.Spells, out spell);
+            _ui.EndPieceDrag(data, mapped, spell, anchor); return;
         }
-        if (_dragPattern < 0) return;
-        ClearPatternPreview();
-        int x, y, sector; if (GetCell(data, out x, out y, out sector)) _ui.MovePattern(_dragPattern, new Vector2Int(x, y) - _dragOffset);
-        _dragPattern = -1;
+        if (IsDraggingPattern) EndPatternDrag(data);
     }
 }
+

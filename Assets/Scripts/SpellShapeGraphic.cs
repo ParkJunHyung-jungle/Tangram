@@ -1,66 +1,68 @@
+using System.Collections.Generic;
+
 using UnityEngine;
 
-/// <summary>손패 카드에 제작판과 같은 칸 크기의 도형을 그린다.</summary>
+/// <summary>조각 도형이나 도안 모양을 1/4 구역 삼각형으로 영역 가운데에 맞춰 그린다.</summary>
 public sealed class SpellShapeGraphic : UnityEngine.UI.MaskableGraphic
 {
+    private const float GAP = 1.5f;
+
+    private readonly List<SpellGame.ShapeCell> _cells = new List<SpellGame.ShapeCell>();
     private SpellGame.Shape _shape;
-    private SpellGame.Card _card;
-    private int _rotation;
     private bool _isCursed;
 
-    public SpellGame.Shape Shape { get { return _shape; } set { _shape = value; SetVerticesDirty(); } }
+    public SpellGame.Shape Shape
+    {
+        get { return _shape; }
+        set { _shape = value; _cells.Clear(); _cells.AddRange(SpellGame.ShapeCells(value, 0)); SetVerticesDirty(); }
+    }
 
-    /// <summary>카드 점유 영역, 회전과 저주 여부를 연결하고 저주 도형은 빨간색으로 표시한다.</summary>
-    public void SetCard(SpellGame.Card card, int rotation = 0, bool isCursed = false) { _card = card; _rotation = rotation; _isCursed = isCursed; SetVerticesDirty(); }
+    /// <summary>도안의 3×3 구역 마스크를 그릴 모양으로 설정한다.</summary>
+    public void SetPattern(int spell)
+    {
+        _cells.Clear();
+        for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++)
+        {
+            int mask = SpellGame.PatternMask(spell, x, y);
+            if (mask != 0) _cells.Add(new SpellGame.ShapeCell(x, y, mask));
+        }
+        SetVerticesDirty();
+    }
 
-    /// <summary>도형 종류에 맞는 정사각형, 삼각형 또는 두 칸 직사각형을 그린다.</summary>
+    /// <summary>칸 범위가 영역에 들어가도록 칸 크기를 정하고 켜진 구역 삼각형을 채운다.</summary>
     protected override void OnPopulateMesh(UnityEngine.UI.VertexHelper vh)
     {
         vh.Clear();
-        if (_card != null)
-        {
-            int columns = SpellGame.ShapeWidth(_card, _rotation), rows = SpellGame.ShapeHeight(_card, _rotation);
-            float size = Mathf.Min((rectTransform.rect.width - 3) / columns, (rectTransform.rect.height - 3) / rows);
-            float leftEdge = rectTransform.rect.center.x - columns * size / 2;
-            float topEdge = rectTransform.rect.center.y + rows * size / 2;
-            for (int y = 0; y < rows; y++) for (int x = 0; x < columns; x++)
-            {
-                int mask = SpellGame.CellMask(_card, _rotation, x, y);
-                Vector2 origin = new Vector2(leftEdge + x * size, topEdge - y * size);
-                Vector2[] corners = { origin, origin + new Vector2(size, 0), origin + new Vector2(size, -size), origin + new Vector2(0, -size) };
-                for (int side = 0; side < 4; side++)
-                {
-                    if ((mask & (1 << side)) == 0) continue;
-                    int start = vh.currentVertCount; UIVertex v = UIVertex.simpleVert; v.color = _isCursed ? Color.red : color;
-                    v.position = origin + new Vector2(size / 2, -size / 2); vh.AddVert(v);
-                    v.position = corners[side]; vh.AddVert(v); v.position = corners[(side + 1) % 4]; vh.AddVert(v);
-                    vh.AddTriangle(start, start + 1, start + 2);
-                }
-            }
-            return;
-        }
-        float width = rectTransform.rect.width - 3f;
-        float height = rectTransform.rect.height - 3f;
-        float left = rectTransform.rect.xMin;
-        float top = rectTransform.rect.yMax;
+        if (_cells.Count == 0) return;
+        Vector2 bounds = SpellPiece3D.CellBounds(_cells);
+        Rect rect = rectTransform.rect;
+        float cell = Mathf.Min(rect.width / bounds.x, rect.height / bounds.y);
+        Vector2 origin = new Vector2(rect.center.x - bounds.x * cell / 2, rect.center.y + bounds.y * cell / 2);
         UIVertex vertex = UIVertex.simpleVert;
-        vertex.color = new Color(0.88f, 0.91f, 0.92f) * color;
-        if (_shape == SpellGame.Shape.QuarterTriangle)
+        vertex.color = (_isCursed ? new Color(1f, 0.3f, 0.3f) : new Color(0.88f, 0.91f, 0.92f)) * color;
+        foreach (SpellGame.ShapeCell c in _cells)
         {
-            vertex.position = new Vector2(left, top); vh.AddVert(vertex);
-            vertex.position = new Vector2(left + width, top); vh.AddVert(vertex);
-            vertex.position = new Vector2(left + width / 2, top - height / 2); vh.AddVert(vertex);
-            vh.AddTriangle(0, 1, 2);
-            return;
-        }
-        vertex.position = new Vector2(left, top); vh.AddVert(vertex);
-        vertex.position = new Vector2(left + width, top); vh.AddVert(vertex);
-        vertex.position = new Vector2(left + width, top - height); vh.AddVert(vertex);
-        vh.AddTriangle(0, 1, 2);
-        if (_shape != SpellGame.Shape.Triangle)
-        {
-            vertex.position = new Vector2(left, top - height); vh.AddVert(vertex);
-            vh.AddTriangle(0, 2, 3);
+            float left = origin.x + c.X * cell + GAP, right = origin.x + (c.X + 1) * cell - GAP;
+            float top = origin.y - c.Y * cell - GAP, bottom = origin.y - (c.Y + 1) * cell + GAP;
+            Vector2[] corners = { new Vector2(left, top), new Vector2(right, top), new Vector2(right, bottom), new Vector2(left, bottom) };
+            Vector2 center = new Vector2((left + right) / 2, (top + bottom) / 2);
+            for (int sector = 0; sector < 4; sector++)
+            {
+                if ((c.Mask & (1 << sector)) == 0) continue;
+                int start = vh.currentVertCount;
+                vertex.position = corners[sector]; vh.AddVert(vertex);
+                vertex.position = corners[(sector + 1) % 4]; vh.AddVert(vertex);
+                vertex.position = center; vh.AddVert(vertex);
+                vh.AddTriangle(start, start + 1, start + 2);
+            }
         }
     }
+    /// <summary>카드 전체의 회전된 칸 목록과 저주 강조 상태를 표시한다.</summary>
+    public void SetCard(SpellGame.Card card, int rotation = 0, bool isCursed = false)
+    {
+        _shape = card.Shape; _isCursed = isCursed;
+        _cells.Clear(); _cells.AddRange(SpellGame.CardCells(card, rotation)); SetVerticesDirty();
+    }
+
 }
+
