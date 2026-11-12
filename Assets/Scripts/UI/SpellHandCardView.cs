@@ -52,8 +52,8 @@ public sealed class SpellHandCardView : MonoBehaviour
         _card = card; _onClick = onClick;
         _drag.Setup(ui, card); _tooltip.Setup(ui, card);
         bool special = card.Effect != SpellGame.Effect.None;
-        bool rectangle = card.Shape == SpellGame.Shape.Rectangle;
-        _shapeArea.sizeDelta = rectangle ? new Vector2(RECT_CELL * 2, RECT_CELL) : new Vector2(CELL, CELL);
+        Vector2 bounds = SpellPiece3D.CellBounds(SpellGame.ShapeCells(card.Shape, 0));
+        _shapeArea.sizeDelta = bounds * (Mathf.Max(bounds.x, bounds.y) > 1 ? RECT_CELL : CELL);
         _shape.Shape = card.Shape;
         _shape.color = special ? effectColor : Color.white;
         _name.text = displayName;

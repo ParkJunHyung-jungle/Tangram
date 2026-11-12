@@ -10,7 +10,8 @@ public sealed class SpellTable3D : MonoBehaviour
 {
     private const int TABLE_LAYER = 30;
     private static readonly Vector3 WORLD_ORIGIN = new Vector3(1000, 0, 0);
-    private static readonly string[] SPELL_NAMES = { "불씨", "방벽", "번개", "유성" };
+    private static readonly Color NORMAL_COLOR = new Color(0.77f, 0.82f, 0.84f);
+    private static readonly Color CLAY_COLOR = new Color(0.72f, 0.56f, 0.44f);
 
     [Header("테이블 카메라")]
     [SerializeField, Range(55f, 90f)] private float _cameraAngle = 90f;
@@ -223,12 +224,37 @@ public sealed class SpellTable3D : MonoBehaviour
             if (piece.IsHand) continue;
             int slot = FreeSlot(); piece.DropToHand(slot, SlotPosition(slot), _cellSize, _dropHeight + Random.Range(0f, 0.45f));
         }
-        foreach (int spell in _game.Spells) foreach (SpellGame.Placement placement in _game.Boards[spell].Pieces)
-        {
-            _layout.PieceToGrid(spell, placement, out Vector2Int anchor, out int rotation);
-            GetPiece(placement.Card).PlaceOnBoard(spell, placement, PiecePosition(placement.Card.Shape, anchor, rotation), _cellSize, rotation);
-        }
+        foreach (int spell in _game.Spells) foreach (SpellGame.Placement placement in _game.Boards[spell].Pieces) PlaceOnBoard(GetPiece(placement.Card), spell, placement);
         RebuildPatterns(); ProjectControls();
+    }
+
+    /// <summary>배치 조각을 격자 칸 모양과 위치에 고정한다. 다른 조각 위에 겹친 덧칠 조각은 한 층 위에 놓는다.</summary>
+    private void PlaceOnBoard(SpellPiece3D piece, int spell, SpellGame.Placement placement)
+    {
+        List<SpellGame.ShapeCell> cells = _layout.PlacementGridCells(spell, placement);
+        Vector2Int anchor = new Vector2Int(int.MaxValue, int.MaxValue);
+        foreach (SpellGame.ShapeCell cell in cells) anchor = Vector2Int.Min(anchor, new Vector2Int(cell.X, cell.Y));
+        for (int i = 0; i < cells.Count; i++) cells[i] = new SpellGame.ShapeCell(cells[i].X - anchor.x, cells[i].Y - anchor.y, cells[i].Mask);
+        float layer = IsLayered(spell, placement) ? SpellPiece3D.Thickness * _cellSize : 0;
+        piece.PlaceOnBoard(spell, placement, cells, PiecePosition(anchor, cells, 0.045f + layer), _cellSize);
+    }
+
+    /// <summary>덧칠 조각이 같은 판의 다른 조각과 구역을 공유하는지 반환한다.</summary>
+    private bool IsLayered(int spell, SpellGame.Placement placement)
+    {
+        if (placement.Card.Effect != SpellGame.Effect.Overpaint) return false;
+        foreach (SpellGame.Placement other in _game.Boards[spell].Pieces)
+        {
+            if (other == placement) continue;
+            for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) if ((other.CellMask(x, y) & placement.CellMask(x, y)) != 0) return true;
+        }
+        return false;
+    }
+
+    /// <summary>집은 조각을 현재 방향의 칸 모양으로 반환한다. 점토는 한 칸으로 보여 준다.</summary>
+    private IReadOnlyList<SpellGame.ShapeCell> HeldCells()
+    {
+        return SpellGame.ShapeCells(_picked.Card.Shape, _picked.Card.Shape == SpellGame.Shape.Clay ? 0 : _rotation);
     }
 
     /// <summary>카드에 대응하는 3D 조각을 재사용하거나 카드 모양과 효과 색으로 생성한다.</summary>
@@ -236,11 +262,7 @@ public sealed class SpellTable3D : MonoBehaviour
     {
         if (_pieces.TryGetValue(card.Id, out SpellPiece3D piece)) return piece;
         piece = CreateRoot("Piece " + card.Id + " " + card.Shape, _world).gameObject.AddComponent<SpellPiece3D>();
-        Color color = new Color(0.77f, 0.82f, 0.84f);
-        if (card.Effect == SpellGame.Effect.Flame) color = new Color(0.94f, 0.46f, 0.22f);
-        else if (card.Effect == SpellGame.Effect.Guard) color = new Color(0.28f, 0.6f, 0.9f);
-        else if (card.Effect == SpellGame.Effect.Resonance) color = new Color(0.7f, 0.42f, 0.92f);
-        else if (card.Effect == SpellGame.Effect.Afterimage) color = new Color(0.3f, 0.86f, 0.73f);
+        Color color = card.Effect == SpellGame.Effect.None ? card.Shape == SpellGame.Shape.Clay ? CLAY_COLOR : NORMAL_COLOR : _ui.EffectColor(card.Effect);
         piece.Setup(card, _pieceMaterial, _physicsMaterial, color); _pieces.Add(card.Id, piece); return piece;
     }
 
@@ -264,12 +286,11 @@ public sealed class SpellTable3D : MonoBehaviour
         return _handRoot.position + new Vector3((slot % 3 - 1) * size.x * (1.46f / 4.65f), 0.025f, (slot / 3 - 1) * size.z * (1.08f / 3.45f));
     }
 
-    /// <summary>격자 앵커와 조각 범위로 실제 조각 중심을 계산한다.</summary>
-    private Vector3 PiecePosition(SpellGame.Shape shape, Vector2Int anchor, int rotation)
+    /// <summary>격자 앵커(범위 왼쪽 위)와 칸 범위로 조각 메시 중심의 월드 위치를 계산한다.</summary>
+    private Vector3 PiecePosition(Vector2Int anchor, IReadOnlyList<SpellGame.ShapeCell> cells, float height)
     {
-        Vector2 center = (Vector2)anchor + Vector2.one * 0.5f;
-        if (shape == SpellGame.Shape.Rectangle) center += rotation % 2 == 0 ? Vector2.right * 0.5f : Vector2.up * 0.5f;
-        return _boardRoot.TransformPoint(GridLocal(center, 0.045f));
+        Vector2 center = anchor + SpellPiece3D.CellBounds(cells) / 2;
+        return _boardRoot.TransformPoint(GridLocal(center, height));
     }
 
     /// <summary>화면 좌표를 3D 판 위 소수 격자 좌표로 바꾸고 평면 교차 여부를 반환한다.</summary>
@@ -375,7 +396,7 @@ public sealed class SpellTable3D : MonoBehaviour
                 if (!collision) { selected = candidate; break; }
             }
             occupied.Add(new Rect(selected.x, -selected.y, width, 36));
-            _screen.Tabs[spell].Bind(SPELL_NAMES[spell], _ui.PatternColor(spell), selected, width);
+            _screen.Tabs[spell].Bind(SpellGame.PatternName(spell), _ui.PatternColor(spell), selected, width);
             _screen.CastButtons[spell].Rect.anchoredPosition = OverlayPoint(parent, sum / Mathf.Max(1, weight));
         }
     }
@@ -418,7 +439,7 @@ public sealed class SpellTable3D : MonoBehaviour
         else if (_picked != null && pressed && _isClickSelected) { FinishPick(_downPosition); return; }
         if (_picked != null)
         {
-            _rotation = (_rotation + rotations) % 4;
+            if (rotations > 0) { _rotation = (_rotation + rotations) % 4; _picked.SetCells(HeldCells()); }
             PreviewPick(pointer);
             if (released && _isHolding)
             {
@@ -540,7 +561,9 @@ public sealed class SpellTable3D : MonoBehaviour
         _picked = piece; _pressPosition = pointer; _isHolding = true; _isClickSelected = false;
         float yaw = piece.transform.eulerAngles.y, nearest = float.PositiveInfinity;
         _rotation = Mathf.RoundToInt(yaw / 90f) % 4;
-        for (int r = 0; r < 4; r++)
+        // 판에 놓인 조각은 메시가 방향을 담고 있으므로 놓인 방향 그대로 집는다.
+        if (!piece.IsHand) { _layout.PieceToGrid(piece.Board, piece.Placement, out Vector2Int _, out _rotation); nearest = 0; }
+        for (int r = 0; r < 4 && piece.IsHand; r++)
         {
             bool valid = false;
             foreach (int spell in _game.Spells) for (int y = 0; y < 3; y++) for (int x = 0; x < 4; x++)
@@ -551,7 +574,7 @@ public sealed class SpellTable3D : MonoBehaviour
             float delta = Mathf.Abs(Mathf.DeltaAngle(yaw, r * 90f));
             if (valid && delta < nearest) { _rotation = r; nearest = delta; }
         }
-        _picked.Pick(_cellSize, _rotation); HideHover(pointer); PreviewPick(pointer);
+        _picked.Pick(_cellSize, HeldCells()); HideHover(pointer); PreviewPick(pointer);
     }
 
     /// <summary>포인터에 가장 가까운 격자 앵커를 찾고 배치 가능 여부를 조각 색으로 표시한다.</summary>
@@ -559,8 +582,8 @@ public sealed class SpellTable3D : MonoBehaviour
     {
         _destination = -1;
         if (!ScreenToGrid(pointer, out Vector2 grid)) return;
-        Vector2 offset = Vector2.one * 0.5f;
-        if (_picked.Card.Shape == SpellGame.Shape.Rectangle) offset += _rotation % 2 == 0 ? Vector2.right * 0.5f : Vector2.up * 0.5f;
+        IReadOnlyList<SpellGame.ShapeCell> cells = HeldCells();
+        Vector2 offset = SpellPiece3D.CellBounds(cells) / 2;
         _anchor = new Vector2Int(Mathf.RoundToInt(grid.x - offset.x), Mathf.RoundToInt(grid.y - offset.y));
         if (OnGrid(grid))
         {
@@ -571,10 +594,10 @@ public sealed class SpellTable3D : MonoBehaviour
                 if (!_game.CanPlace(spell, _picked.Card, local.x, local.y, localRotation, _picked.Board == spell ? _picked.Placement : null)) continue;
                 _destination = spell; _local = local; _localRotation = localRotation; break;
             }
-            _picked.transform.position = PiecePosition(_picked.Card.Shape, _anchor, _rotation) + Vector3.up * 0.22f;
+            _picked.transform.position = PiecePosition(_anchor, cells, 0.045f) + Vector3.up * 0.22f;
         }
         else _picked.transform.position = _boardRoot.TransformPoint(GridLocal(grid, 0.42f));
-        _picked.transform.rotation = Quaternion.Euler(0, _rotation * 90f, 0);
+        _picked.transform.rotation = Quaternion.identity;
         _picked.SetTint(_destination >= 0 ? new Color(0.55f, 0.95f, 0.68f) : new Color(1f, 0.5f, 0.4f));
     }
 
@@ -598,11 +621,7 @@ public sealed class SpellTable3D : MonoBehaviour
     private void RestorePiece(SpellPiece3D piece)
     {
         if (piece.IsHand) piece.DropToHand(piece.Slot, SlotPosition(piece.Slot), _cellSize, 0.25f);
-        else
-        {
-            _layout.PieceToGrid(piece.Board, piece.Placement, out Vector2Int anchor, out int rotation);
-            piece.PlaceOnBoard(piece.Board, piece.Placement, PiecePosition(piece.Card.Shape, anchor, rotation), _cellSize, rotation);
-        }
+        else PlaceOnBoard(piece, piece.Board, piece.Placement);
     }
 
     /// <summary>모델을 바꾸지 않고 진행 중인 집기를 취소하며 물리 상태를 복구한다.</summary>

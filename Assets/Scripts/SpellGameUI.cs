@@ -21,11 +21,6 @@ public sealed class SpellGameUI : MonoBehaviour
     private const float ENEMY_NARROW_BAR_WIDTH = 280f;
     private const float MENU_GAP = 4f;
     private static readonly bool ONBOARDING_ENABLED = false;
-    private static readonly string[] SPELL_NAMES = { "불씨", "방벽", "번개", "유성" };
-    private static readonly string[] SPELL_EFFECTS = { "단일 피해 6", "방어 7", "단일 피해 12", "전체 피해 10" };
-    private static readonly int[] SPELL_BASE = { 6, 7, 12, 10 };
-    private static readonly string[] REWARD_NAMES = { "불꽃 삼각형\n공격 피해 +2", "수호 정사각형\n방어 +3", "공명 직사각형\n3칸 이상: 조각 1장 뽑기", "잔상 1/4 삼각형\n시전 후 1회 유지", "도안: 번개\n단일 피해 12", "도안: 유성\n전체 피해 10" };
-    private static readonly IReadOnlyList<Vector2Int>[] PATTERN_CELLS = CreatePatternCells();
     private static readonly Vector2 MESSAGE_POSITION = new Vector2(705, -480);
     private static readonly Vector2 FEEDBACK_POSITION = new Vector2(960, -100);
     private static readonly Vector2 NORMAL_ENEMY_SIZE = new Vector2(150, 190);
@@ -42,15 +37,21 @@ public sealed class SpellGameUI : MonoBehaviour
     [SerializeField] private SpellPauseMenu _pauseMenu;
     [SerializeField] private SpellHelpPanel _helpPanel;
     [SerializeField] private SpellPileViewer _pileViewer;
+    [SerializeField] private SpellLoadoutScreen _loadoutScreen;
     [SerializeField] private SpellTable3D _table;
     [SerializeField] private GameObject _background;
 
     [Header("상태 색")]
-    [SerializeField] private Color[] _patternColors = { new Color(0.957f, 0.788f, 0.365f), new Color(0.902f, 0.922f, 0.941f), new Color(0.725f, 0.89f, 0.42f), new Color(0.949f, 0.553f, 0.698f) };
+    [SerializeField] private Color[] _patternColors = { new Color(0.957f, 0.788f, 0.365f), new Color(0.902f, 0.922f, 0.941f), new Color(0.725f, 0.89f, 0.42f), new Color(0.949f, 0.553f, 0.698f), new Color(0.55f, 0.85f, 0.95f), new Color(0.96f, 0.6f, 0.35f), new Color(0.72f, 0.62f, 0.98f) };
     [SerializeField] private Color _flameColor = new Color(0.878f, 0.478f, 0.247f);
     [SerializeField] private Color _guardColor = new Color(0.31f, 0.584f, 0.839f);
     [SerializeField] private Color _resonanceColor = new Color(0.655f, 0.467f, 0.851f);
     [SerializeField] private Color _afterimageColor = new Color(0.333f, 0.78f, 0.702f);
+    [SerializeField] private Color _scribeColor = new Color(0.93f, 0.85f, 0.55f);
+    [SerializeField] private Color _sparkColor = new Color(0.95f, 0.35f, 0.45f);
+    [SerializeField] private Color _periodColor = new Color(0.65f, 0.9f, 0.35f);
+    [SerializeField] private Color _cogColor = new Color(0.72f, 0.55f, 0.38f);
+    [SerializeField] private Color _overpaintColor = new Color(0.9f, 0.45f, 0.85f);
     [SerializeField] private Color[] _enemyColors = { new Color(0.478f, 0.416f, 0.549f), new Color(0.373f, 0.498f, 0.447f), new Color(0.549f, 0.431f, 0.369f) };
     [SerializeField] private Color _textColor = new Color(0.945f, 0.922f, 0.867f);
     [SerializeField] private Color _subColor = new Color(0.741f, 0.706f, 0.627f);
@@ -59,9 +60,7 @@ public sealed class SpellGameUI : MonoBehaviour
     [SerializeField] private Color _warnColor = new Color(0.949f, 0.722f, 0.294f);
 
     private readonly SpellGame _game = new SpellGame();
-    private readonly List<int> _rewards = new List<int>();
     private readonly SpellPatternLayout _layout = new SpellPatternLayout();
-    private readonly System.Random _random = new System.Random();
     private RectTransform _root;
     private Font _font;
     private SpellBoardGraphic _boardGraphic;
@@ -110,20 +109,6 @@ public sealed class SpellGameUI : MonoBehaviour
     public int Rotation { get { return _rotation; } }
     public bool IsTableActive { get { return _table != null; } }
     public bool CanInteract { get { return isActiveAndEnabled && !_showPauseMenu && !_showHelp && _openPile < 0 && _game.CurrentPhase == SpellGame.Phase.Combat; } }
-
-    /// <summary>논리 도안 마스크에서 점유 칸 좌표를 한 번 생성해 읽기 전용 목록으로 반환한다.</summary>
-    private static IReadOnlyList<Vector2Int>[] CreatePatternCells()
-    {
-        IReadOnlyList<Vector2Int>[] patterns = new IReadOnlyList<Vector2Int>[4];
-        for (int spell = 0; spell < patterns.Length; spell++)
-        {
-            List<Vector2Int> cells = new List<Vector2Int>();
-            for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++)
-                if (SpellGame.PatternMask(spell, x, y) != 0) cells.Add(new Vector2Int(x, y));
-            patterns[spell] = cells.AsReadOnly();
-        }
-        return patterns;
-    }
 
     void Awake()
     {
@@ -324,9 +309,11 @@ public sealed class SpellGameUI : MonoBehaviour
         _table.SetVisible(combat);
         _titleScreen.gameObject.SetActive(phase == SpellGame.Phase.Title);
         _rewardScreen.gameObject.SetActive(phase == SpellGame.Phase.Reward);
+        _loadoutScreen.gameObject.SetActive(phase == SpellGame.Phase.Loadout);
         _resultScreen.gameObject.SetActive(result);
         if (combat) RefreshCombat();
         else if (phase == SpellGame.Phase.Reward) RefreshRewards();
+        else if (phase == SpellGame.Phase.Loadout) RefreshLoadout();
         else if (result) _resultScreen.Bind(phase == SpellGame.Phase.Victory ? "승리" : "패배");
         RenderOnboardingLayer(combat);
         RefreshOverlays();
@@ -339,6 +326,30 @@ public sealed class SpellGameUI : MonoBehaviour
         _titleScreen.StartButton.SetAction(StartNewGame);
         _resultScreen.Restart.SetAction(StartNewGame);
         _rewardScreen.Skip.SetAction(() => ChooseReward(-1));
+        _loadoutScreen.Setup(_layout, _game.OwnedSpells, PatternColor, StartLoadoutBattle);
+    }
+
+    /// <summary>장착 화면에 들어올 때 새로 얻은 도안을 빈자리에 먼저 놓아 보고 장착 화면을 갱신한다.</summary>
+    private void RefreshLoadout()
+    {
+        if (_renderedPhase != SpellGame.Phase.Loadout && _game.LastAcquiredPattern >= 0) _layout.TryAutoPlace(_game.LastAcquiredPattern, PlacedOwned());
+        _loadoutScreen.Refresh();
+    }
+
+    /// <summary>보유 도안 중 격자에 놓인 도안 목록을 반환한다.</summary>
+    private List<int> PlacedOwned()
+    {
+        List<int> placed = new List<int>();
+        foreach (int spell in _game.OwnedSpells) if (_layout.IsPlaced(spell)) placed.Add(spell);
+        return placed;
+    }
+
+    /// <summary>격자에 놓인 도안을 장착해 다음 전투를 시작한다. 하나도 없으면 안내만 갱신한다.</summary>
+    private void StartLoadoutBattle()
+    {
+        List<int> equipped = PlacedOwned();
+        if (!_game.StartNextBattle(equipped)) { _loadoutScreen.ShowHint("도안을 하나 이상 격자에 놓아 주세요"); return; }
+        ClearSelection(); _message = ""; Render();
     }
 
     /// <summary>새 게임을 시작하고 도안 배치와 선택을 초기화한다.</summary>
@@ -450,8 +461,8 @@ public sealed class SpellGameUI : MonoBehaviour
             Vector2[] candidates = { new Vector2(bounds.xMin, -bounds.yMin + TAB_HEIGHT), new Vector2(bounds.xMin, -bounds.yMax), new Vector2(bounds.xMin - cell, -bounds.yMin), new Vector2(bounds.xMax, -bounds.yMin) };
             Vector2 position = candidates[0];
             foreach (Vector2 candidate in candidates) if (IsTabPositionFree(i, candidate, cell)) { position = candidate; break; }
-            _combatScreen.Tabs[i].Bind(SPELL_NAMES[i], PatternColor(i), position, cell);
-            if (castable) _combatScreen.CastButtons[i].Bind(PatternColor(i), _pendingCast == i || (_castDragging && _castDragBoard == i), PatternCenter(i, cell));
+            _combatScreen.Tabs[i].Bind(SpellGame.PatternName(i), PatternColor(i), position, cell);
+            if (castable) _combatScreen.CastButtons[i].Bind(PatternColor(i), _pendingCast == i || (_castDragging && _castDragBoard == i), PatternCenter(i, cell), FormulaText(i));
         }
         _table.ProjectControls();
     }
@@ -535,39 +546,38 @@ public sealed class SpellGameUI : MonoBehaviour
     /// <summary>도안의 빈 구역을 1/4칸 단위 문구로 반환한다.</summary>
     private string RemainingText(int spell)
     {
-        int total = 0, filled = 0;
-        for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) total += BitCount(SpellGame.PatternMask(spell, x, y));
-        foreach (SpellGame.Placement piece in _game.Boards[spell].Pieces)
-            filled += piece.Card.Shape == SpellGame.Shape.QuarterTriangle ? 1 : piece.Card.Shape == SpellGame.Shape.Triangle ? 2 : piece.Card.Shape == SpellGame.Shape.Square ? 4 : 8;
-        int left = Math.Max(0, total - filled);
+        int left = Math.Max(0, SpellGame.PatternArea(spell) - _game.FilledArea(spell));
         if (left % 4 == 0) return $"{left / 4}칸 남음";
         return left < 4 ? $"{left}/4칸 남음" : $"{left / 4}칸 {left % 4}/4 남음";
     }
 
-    /// <summary>도안의 기본 효과와 특수 조각 효과를 계산식과 부가 효과 문구로 만든다.</summary>
+    /// <summary>도안을 지금 시전했을 때의 예상 수식을 한 줄로 만든다. 예: 산탄 · 4타 × (2 + 불꽃 2) = 무작위 16</summary>
+    public string FormulaText(int spell)
+    {
+        SpellGame.SpellEvaluation e = _game.Evaluate(spell);
+        string terms = "";
+        foreach (string term in e.Terms) terms += " + " + term.Replace(" +", " ");
+        string main;
+        if (e.Kind == SpellGame.SpellKind.Scatter) main = e.Terms.Count > 0 ? $"{e.Hits}타 × ({e.Base}{terms}) = 무작위 {e.Total}" : $"{e.Hits}타 × {e.Base} = 무작위 {e.Total}";
+        else
+        {
+            string word = e.Kind == SpellGame.SpellKind.Block ? "방어" : e.Kind == SpellGame.SpellKind.All ? "전체" : "피해";
+            main = e.Terms.Count > 0 ? $"{word} {e.Base}{terms} = {e.Value}" : $"{word} {e.Value}";
+        }
+        List<string> extras = new List<string>();
+        int guard = e.Block - (e.Kind == SpellGame.SpellKind.Block ? e.Value : 0);
+        if (guard > 0) extras.Add($"방어 +{guard}");
+        if (e.SparkHits > 0) extras.Add($"불티 {e.SparkHits}타");
+        if (e.Draws > 0) extras.Add($"필사 {e.Draws}장");
+        if (e.Afterimages > 0) extras.Add($"잔상 {e.Afterimages}장 유지");
+        return extras.Count > 0 ? main + "  ·  " + string.Join(" · ", extras) : main;
+    }
+
+    /// <summary>도안의 예상 수식과 미완성 안내를 툴팁용 문구로 만든다.</summary>
     private string BuildFormula(int spell, bool complete, out string detail)
     {
-        int flame = 0, guard = 0, resonance = 0, afterimage = 0;
-        foreach (SpellGame.Placement piece in _game.Boards[spell].Pieces)
-        {
-            if (piece.Card.Effect == SpellGame.Effect.Flame) flame++;
-            if (piece.Card.Effect == SpellGame.Effect.Guard) guard++;
-            if (piece.Card.Effect == SpellGame.Effect.Resonance && spell >= 2) resonance++;
-            if (piece.Card.Effect == SpellGame.Effect.Afterimage && !piece.HasPersisted) afterimage++;
-        }
-        List<string> notes = new List<string>();
-        if (resonance > 0) notes.Add($"공명 · 시전 후 조각 {resonance}장 뽑기");
-        if (afterimage > 0) notes.Add($"잔상 {afterimage}장 · 시전 후 판에 1회 남음");
-        if (!complete) notes.Add("빈 구역을 채우면 시전할 수 있습니다");
-        detail = string.Join("    ", notes);
-        if (spell == 1)
-        {
-            int defense = SPELL_BASE[1] + guard * 3;
-            return guard > 0 ? $"기본 방어 {SPELL_BASE[1]}  +  수호 {guard * 3}  =  방어 {defense}" : $"방어 {defense}";
-        }
-        string word = spell == 3 ? "전체 피해" : "피해";
-        int damage = _game.GetSpellDamage(spell);
-        return flame > 0 ? $"기본 {word} {SPELL_BASE[spell]}  +  불꽃 {flame * 2}  =  {word} {damage}" : $"{word} {damage}";
+        detail = complete ? "" : "빈 구역을 채우면 시전할 수 있습니다";
+        return SpellGame.PatternDescription(spell) + "\n예상 " + FormulaText(spell);
     }
 
     /// <summary>적 슬롯을 적 수에 맞춰 배치하고 상태·대상·조준 미리보기를 갱신한다.</summary>
@@ -805,7 +815,7 @@ public sealed class SpellGameUI : MonoBehaviour
     {
         if (!_game.IsComplete(board)) { _message = "도안을 먼저 완성하세요"; Render(); return; }
         ClearSelection();
-        if (board == 0 || board == 2)
+        if (SpellGame.NeedsTarget(board))
         {
             int count = 0, onlyTarget = -1;
             for (int i = 0; i < _game.Enemies.Count; i++) if (_game.Enemies[i].Health > 0) { count++; onlyTarget = i; }
@@ -818,10 +828,10 @@ public sealed class SpellGameUI : MonoBehaviour
     /// <summary>완성된 도안과 선택한 적으로 주문을 시전하고 결과를 표시한다.</summary>
     private void CastSpell(int board, int target)
     {
-        string result = $"{SPELL_NAMES[board]} 시전  ·  {Preview(_game.Boards[board])}";
+        string result = $"{SpellGame.PatternName(board)} 시전  ·  {FormulaText(board)}";
         if (!_game.Cast(board, target)) { _message = "살아 있는 대상을 선택하세요"; Render(); return; }
         _onboardingComplete = true;
-        _pendingCast = -1; ClearSelection(); _impactAll = board == 3; _impactTarget = board == 1 ? -1 : target;
+        _pendingCast = -1; ClearSelection(); SpellGame.SpellKind kind = SpellGame.PatternKind(board); _impactAll = kind == SpellGame.SpellKind.All || kind == SpellGame.SpellKind.Scatter; _impactTarget = kind == SpellGame.SpellKind.Single ? target : -1;
         _message = ""; ShowFeedback(result, PatternColor(board)); Render();
     }
 
@@ -844,7 +854,7 @@ public sealed class SpellGameUI : MonoBehaviour
         bool complete = _game.IsComplete(spell);
         string detail;
         string formula = BuildFormula(spell, complete, out detail);
-        ShowTextTooltip($"{SPELL_NAMES[spell]} · {(complete ? "완성" : RemainingText(spell))}\n{formula}" + (string.IsNullOrEmpty(detail) ? "" : "\n" + detail) + (card == null ? "" : "\n" + CardName(card)), screenPosition);
+        ShowTextTooltip($"{SpellGame.PatternName(spell)} · {(complete ? "완성" : RemainingText(spell))}\n{formula}" + (string.IsNullOrEmpty(detail) ? "" : "\n" + detail) + (card == null ? "" : "\n" + CardName(card)), screenPosition);
     }
 
     /// <summary>지정한 설명을 화면 좌표 근처에 표시하거나 지운다. 드래그·조준 중에는 표시하지 않는다.</summary>
@@ -860,7 +870,7 @@ public sealed class SpellGameUI : MonoBehaviour
         HideAim();
         bool wasDragging = _castDragging;
         _castDragging = false; _hoverEnemy = -1;
-        if (!CanInteract || (board != 0 && board != 2) || !wasDragging) return;
+        if (!CanInteract || !SpellGame.NeedsTarget(board) || !wasDragging) return;
         int target = EnemyAt(eventData.position, eventData.pressEventCamera);
         if (target >= 0) { CastSpell(board, target); return; }
         _pendingCast = -1;
@@ -879,7 +889,7 @@ public sealed class SpellGameUI : MonoBehaviour
     /// <summary>단일 대상 주문 드래그의 조준 상태를 시작한다.</summary>
     public void BeginCastDrag(int board)
     {
-        if (!CanInteract || (board != 0 && board != 2)) return;
+        if (!CanInteract || !SpellGame.NeedsTarget(board)) return;
         _combatScreen.Tooltip.Hide();
         ClearSelection();
         _castDragging = true; _castDragBoard = board; _hoverEnemy = -1;
@@ -890,7 +900,7 @@ public sealed class SpellGameUI : MonoBehaviour
     /// <summary>시전 드래그 중 조준선을 그리고 포인터 아래 적의 예상 피해를 갱신한다.</summary>
     public void PreviewCast(int board, PointerEventData eventData)
     {
-        if (!CanInteract || (board != 0 && board != 2)) return;
+        if (!CanInteract || !SpellGame.NeedsTarget(board)) return;
         DrawAim(board, eventData.position);
         UpdateHoverEnemy(board, EnemyAt(eventData.position, eventData.pressEventCamera));
     }
@@ -999,99 +1009,108 @@ public sealed class SpellGameUI : MonoBehaviour
     }
 
     /// <summary>특수 효과의 표시 색을 반환한다. 일반 조각은 글자색을 반환한다.</summary>
-    private Color EffectColor(SpellGame.Effect effect)
+    public Color EffectColor(SpellGame.Effect effect)
     {
         switch (effect)
         {
             case SpellGame.Effect.Flame: return _flameColor;
             case SpellGame.Effect.Guard: return _guardColor;
-            case SpellGame.Effect.Resonance: return _resonanceColor;
+            case SpellGame.Effect.Scribe: return _scribeColor;
             case SpellGame.Effect.Afterimage: return _afterimageColor;
+            case SpellGame.Effect.Spark: return _sparkColor;
+            case SpellGame.Effect.Period: return _periodColor;
+            case SpellGame.Effect.Resonance: return _resonanceColor;
+            case SpellGame.Effect.Cog: return _cogColor;
+            case SpellGame.Effect.Overpaint: return _overpaintColor;
             default: return _textColor;
         }
-    }
-
-    /// <summary>판의 기본 효과와 현재 특수 조각의 효과 합을 반환한다.</summary>
-    private string Preview(SpellGame.Board board, SpellGame.Card additional = null)
-    {
-        int flame = 0, guard = 0, extraPlacements = 0, afterimages = 0;
-        foreach (SpellGame.Placement p in board.Pieces) { if (p.Card.Effect == SpellGame.Effect.Flame) flame += 2; if (p.Card.Effect == SpellGame.Effect.Guard) guard += 3; if (p.Card.Effect == SpellGame.Effect.Resonance && board.Spell >= 2) extraPlacements++; if (p.Card.Effect == SpellGame.Effect.Afterimage && !p.HasPersisted) afterimages++; }
-        if (additional != null)
-        {
-            if (additional.Effect == SpellGame.Effect.Flame) flame += 2;
-            if (additional.Effect == SpellGame.Effect.Guard) guard += 3;
-            if (additional.Effect == SpellGame.Effect.Resonance && board.Spell >= 2) extraPlacements++;
-            if (additional.Effect == SpellGame.Effect.Afterimage && !additional.HasPersisted) afterimages++;
-        }
-        return SPELL_EFFECTS[board.Spell] + (flame > 0 && board.Spell != 1 ? $" +{flame} 피해" : "") + (guard > 0 ? $" +{guard} 방어" : "") + (extraPlacements > 0 ? $" · 조각 {extraPlacements}장 뽑기" : "") + (afterimages > 0 ? $" · 잔상 {afterimages}장 유지" : "");
     }
 
     /// <summary>도형 이름을 반환한다.</summary>
     private static string ShapeName(SpellGame.Shape shape)
     {
-        return shape == SpellGame.Shape.Square ? "정사각형" : shape == SpellGame.Shape.Triangle ? "반칸 삼각형" : shape == SpellGame.Shape.QuarterTriangle ? "1/4 삼각형" : "직사각형";
+        switch (shape)
+        {
+            case SpellGame.Shape.Square: return "정사각형";
+            case SpellGame.Shape.Triangle: return "반칸 삼각형";
+            case SpellGame.Shape.Rectangle: return "직사각형";
+            case SpellGame.Shape.QuarterTriangle: return "1/4 삼각형";
+            case SpellGame.Shape.Diamond: return "마름모";
+            case SpellGame.Shape.Parallelogram: return "평행사변형";
+            case SpellGame.Shape.MediumTriangle: return "중간 삼각형";
+            case SpellGame.Shape.House: return "맞춤 조각";
+            case SpellGame.Shape.LargeTriangle: return "큰 삼각형";
+            case SpellGame.Shape.LShape: return "L자 조각";
+            default: return "점토";
+        }
+    }
+
+    /// <summary>효과 이름을 반환한다. 일반은 빈 문자열이다.</summary>
+    private static string EffectName(SpellGame.Effect effect)
+    {
+        switch (effect)
+        {
+            case SpellGame.Effect.Flame: return "불꽃";
+            case SpellGame.Effect.Guard: return "수호";
+            case SpellGame.Effect.Scribe: return "필사";
+            case SpellGame.Effect.Afterimage: return "잔상";
+            case SpellGame.Effect.Spark: return "불티";
+            case SpellGame.Effect.Period: return "마침표";
+            case SpellGame.Effect.Resonance: return "공명";
+            case SpellGame.Effect.Cog: return "톱니";
+            case SpellGame.Effect.Overpaint: return "덧칠";
+            default: return "";
+        }
     }
 
     /// <summary>카드의 도형과 특수 효과를 표시하는 이름을 반환한다.</summary>
     private string CardName(SpellGame.Card card)
     {
-        string effect = card.Effect == SpellGame.Effect.Flame ? "불꽃 · 공격 피해 +2" : card.Effect == SpellGame.Effect.Guard ? "수호 · 방어 +3" : card.Effect == SpellGame.Effect.Resonance ? "공명 · 3칸 이상 조각 1장 뽑기" : card.Effect == SpellGame.Effect.Afterimage ? card.HasPersisted ? "잔상 · 다음 시전 후 버림" : "잔상 · 시전 후 1회 유지" : "일반 · 추가 효과 없음";
-        return ShapeName(card.Shape) + "\n" + effect;
+        string effect = EffectText(card);
+        if (card.Effect != SpellGame.Effect.None) effect = EffectName(card.Effect) + " · " + effect;
+        else if (string.IsNullOrEmpty(effect)) effect = "일반 · 추가 효과 없음";
+        return DisplayName(card) + "\n" + effect;
     }
 
     /// <summary>손패 카드에 쓸 짧은 이름을 반환한다. 특수 조각은 효과 이름을 앞에 붙인다.</summary>
     private static string DisplayName(SpellGame.Card card)
     {
-        string shape = card.Shape == SpellGame.Shape.Triangle && card.Effect != SpellGame.Effect.None ? "삼각형" : ShapeName(card.Shape);
-        switch (card.Effect)
-        {
-            case SpellGame.Effect.Flame: return "불꽃 " + shape;
-            case SpellGame.Effect.Guard: return "수호 " + shape;
-            case SpellGame.Effect.Resonance: return "공명 " + shape;
-            case SpellGame.Effect.Afterimage: return "잔상 " + shape;
-            default: return shape;
-        }
+        if (card.Effect == SpellGame.Effect.None) return ShapeName(card.Shape);
+        string shape = card.Shape == SpellGame.Shape.Triangle ? "삼각형" : card.Shape == SpellGame.Shape.QuarterTriangle && card.Effect == SpellGame.Effect.Period ? "쐐기" : ShapeName(card.Shape);
+        return EffectName(card.Effect) + " " + shape;
     }
 
-    /// <summary>손패 카드 아래 칩에 쓸 특수 효과 문구를 반환한다.</summary>
+    /// <summary>손패 카드 아래 칩과 설명에 쓸 효과 문구를 반환한다.</summary>
     private static string EffectText(SpellGame.Card card)
     {
         switch (card.Effect)
         {
-            case SpellGame.Effect.Flame: return "공격 피해 +2";
+            case SpellGame.Effect.Flame: return "피해 +2 · 다타 주문은 타격마다 +1";
             case SpellGame.Effect.Guard: return "방어 +3";
-            case SpellGame.Effect.Resonance: return "3칸 이상 조각 1장 뽑기";
-            case SpellGame.Effect.Afterimage: return card.HasPersisted ? "다음 시전 후 버림" : "시전 후 1회 유지";
-            default: return "";
+            case SpellGame.Effect.Scribe: return "시전 시 조각 1장 뽑기";
+            case SpellGame.Effect.Afterimage: return card.HasPersisted ? "다음 시전 후 버림 · 조각 수에 세지 않음" : "시전 후 1회 유지";
+            case SpellGame.Effect.Spark: return $"시전 시 무작위 적에게 {SpellGame.SPARK_DAMAGE} 피해";
+            case SpellGame.Effect.Period: return "도안을 완성시킨 마지막 조각이면 수치 +3";
+            case SpellGame.Effect.Resonance: return "3장 이상 함께 소모되면 수치 +3";
+            case SpellGame.Effect.Cog: return "변을 맞댄 조각 1장당 피해 +1 (최대 +3)";
+            case SpellGame.Effect.Overpaint: return "놓인 조각 위에 한 겹 겹쳐 놓을 수 있음 · 수치 +2";
+            default: return card.Shape == SpellGame.Shape.Clay ? "놓은 칸의 빈 구역 모양으로 변함 (1칸 이하)" : "";
         }
     }
 
-    /// <summary>미보유 도안이 있으면 혼합 후보 세 개, 없으면 특수 카드 네 종류를 보상 화면에 표시한다. 후보는 보상 단계에 처음 들어올 때만 뽑는다.</summary>
+    /// <summary>모든 조각 카드와 아직 없는 도안을 보상 화면에 표시한다.</summary>
     private void RefreshRewards()
     {
-        if (_renderedPhase != SpellGame.Phase.Reward)
+        IReadOnlyList<SpellGame.Reward> rewards = _game.Rewards;
+        SpellRewardCardView[] cards = _rewardScreen.ShowCards(rewards.Count);
+        for (int i = 0; i < rewards.Count; i++)
         {
-            _rewards.Clear(); List<int> missing = new List<int>(); if (!_game.Spells.Contains(2)) missing.Add(4); if (!_game.Spells.Contains(3)) missing.Add(5);
-            if (missing.Count == 0) _rewards.AddRange(new[] { 0, 1, 2, 3 });
+            SpellGame.Reward reward = rewards[i];
+            if (reward.IsPattern) cards[i].BindPattern(i, $"도안: {SpellGame.PatternName(reward.Pattern)}\n{SpellGame.PatternDescription(reward.Pattern)}", reward.Pattern, PatternColor(reward.Pattern), ChooseReward);
             else
             {
-                _rewards.Add(missing[_random.Next(missing.Count)]);
-                _rewards.Add(_random.Next(4)); List<int> pool = new List<int> { 0, 1, 2, 3 }; pool.AddRange(missing);
-                while (_rewards.Count < 3) { int pick = pool[_random.Next(pool.Count)]; if (!_rewards.Contains(pick)) _rewards.Add(pick); }
-            }
-            for (int i = _rewards.Count - 1; i > 0; i--) { int j = _random.Next(i + 1); int t = _rewards[i]; _rewards[i] = _rewards[j]; _rewards[j] = t; }
-        }
-        SpellRewardCardView[] cards = _rewardScreen.Cards;
-        _rewardScreen.ShowCards(Mathf.Min(_rewards.Count, cards.Length));
-        for (int i = 0; i < _rewards.Count && i < cards.Length; i++)
-        {
-            int reward = _rewards[i];
-            if (reward >= 4) cards[i].BindPattern(reward, REWARD_NAMES[reward], PATTERN_CELLS[reward - 2], PatternColor(reward - 2), ChooseReward);
-            else
-            {
-                SpellGame.Effect effect = reward == 0 ? SpellGame.Effect.Flame : reward == 1 ? SpellGame.Effect.Guard : reward == 2 ? SpellGame.Effect.Resonance : SpellGame.Effect.Afterimage;
-                SpellGame.Shape shape = reward == 0 ? SpellGame.Shape.Triangle : reward == 1 ? SpellGame.Shape.Square : reward == 2 ? SpellGame.Shape.Rectangle : SpellGame.Shape.QuarterTriangle;
-                cards[i].BindPiece(reward, REWARD_NAMES[reward], shape, EffectColor(effect), ChooseReward);
+                SpellGame.Card card = new SpellGame.Card { Shape = reward.Shape, Effect = reward.Effect };
+                cards[i].BindPiece(i, CardName(card), reward.Shape, reward.Effect == SpellGame.Effect.None ? _subColor : EffectColor(reward.Effect), ChooseReward);
             }
         }
     }
@@ -1123,7 +1142,7 @@ public sealed class SpellGameUI : MonoBehaviour
         SpellGame.Placement ignored = _selectedBoard == board ? _selectedPiece : null;
         bool completes = CanPreviewGrid(board, anchor) && _game.WouldComplete(board, _selectedCard, x, y, rotation, ignored);
         bool success = _selectedPiece == null ? _game.Place(board, _selectedCard, x, y, rotation) : _game.Move(_selectedBoard, _selectedPiece, board, x, y, rotation);
-        if (success) { ClearSelection(); _message = ""; if (completes) SetNotice($"{SPELL_NAMES[board]} 완성 · 시전 버튼을 누르세요", PatternColor(board)); } else _message = PlacementIssue(board, anchor) ?? "이 위치에는 놓을 수 없습니다";
+        if (success) { ClearSelection(); _message = ""; if (completes) SetNotice($"{SpellGame.PatternName(board)} 완성 · 시전 버튼을 누르세요", PatternColor(board)); } else _message = PlacementIssue(board, anchor) ?? "이 위치에는 놓을 수 없습니다";
         Render();
     }
 
@@ -1155,8 +1174,7 @@ public sealed class SpellGameUI : MonoBehaviour
             ToLocalPlacement(board, anchor, out x, out y, out rotation);
             bool valid = CanPreviewGrid(board, anchor);
             bool complete = valid && _game.WouldComplete(board, _selectedCard, x, y, rotation, _selectedBoard == board ? _selectedPiece : null);
-            SpellGame.Card additional = _selectedBoard == board && _selectedPiece != null ? null : _selectedCard;
-            hint = complete ? $"놓으면 도안 완성  ·  {Preview(_game.Boards[board], additional)}" : valid ? $"배치 가능  ·  예상 {Preview(_game.Boards[board], additional)}" : PlacementIssue(board, anchor);
+            hint = complete ? $"놓으면 {SpellGame.PatternName(board)} 완성" : valid ? $"배치 가능  ·  {RemainingText(board)}" : PlacementIssue(board, anchor);
         }
         _hintText = hint;
     }
@@ -1204,7 +1222,7 @@ public sealed class SpellGameUI : MonoBehaviour
     {
         RectTransform ghost = _combatScreen.PieceGhost;
         float cell = _boardGraphic.CellSize;
-        ghost.sizeDelta = card.Shape == SpellGame.Shape.Rectangle ? new Vector2(2 * cell, cell) : new Vector2(cell, cell);
+        ghost.sizeDelta = SpellPiece3D.CellBounds(SpellGame.ShapeCells(card.Shape, 0)) * cell;
         ghost.localRotation = Quaternion.Euler(0, 0, -90 * _rotation);
         _combatScreen.PieceGhostShape.Shape = card.Shape;
         Color color = card.Effect == SpellGame.Effect.None ? Color.white : EffectColor(card.Effect);

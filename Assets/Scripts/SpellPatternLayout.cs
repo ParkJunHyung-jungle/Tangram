@@ -7,12 +7,12 @@ public sealed class SpellPatternLayout
 {
     public const int COLUMNS = 4;
     public const int ROWS = 3;
-    private const int PATTERN_COUNT = 4;
+    private const int PATTERN_COUNT = SpellGame.PATTERN_COUNT;
     private const int LOCAL_SIZE = 3;
     private const int FULL_MASK = 15;
 
-    private static readonly Vector2Int[] DEFAULT_ORIGINS = { new Vector2Int(0, 0), new Vector2Int(0, 0), new Vector2Int(1, 1), new Vector2Int(2, 0) };
-    private static readonly int[] DEFAULT_ROTATIONS = { 0, 1, 0, 0 };
+    private static readonly Vector2Int[] DEFAULT_ORIGINS = { new Vector2Int(0, 0), new Vector2Int(0, 0), new Vector2Int(1, 1), new Vector2Int(2, 0), new Vector2Int(2, 1), new Vector2Int(1, 0), new Vector2Int(2, 1) };
+    private static readonly int[] DEFAULT_ROTATIONS = { 0, 1, 0, 0, 0, 0, 0 };
     private static readonly Vector2Int[] SIDE_OFFSETS = { new Vector2Int(0, -1), new Vector2Int(1, 0), new Vector2Int(0, 1), new Vector2Int(-1, 0) };
 
     private readonly Vector2Int[] _origins = new Vector2Int[PATTERN_COUNT];
@@ -128,6 +128,21 @@ public sealed class SpellPatternLayout
         _origins[spell] = origin; _rotations[spell] = Wrap(rotation); _placed[spell] = true;
     }
 
+    /// <summary>도안을 격자에서 내려 보관 상태로 만든다.</summary>
+    public void Unplace(int spell) { _placed[spell] = false; }
+
+    /// <summary>도안 하나를 기본 위치에, 막히면 비어 있는 첫 위치·회전에 놓는다. 자리가 없으면 false를 반환한다.</summary>
+    public bool TryAutoPlace(int spell, IReadOnlyList<int> owned)
+    {
+        if (_placed[spell]) return true;
+        if (MoveIssue(spell, _origins[spell], _rotations[spell], owned) == null) { Place(spell, _origins[spell], _rotations[spell]); return true; }
+        for (int rotation = 0; rotation < 4; rotation++)
+            for (int y = 0; y < ROWS; y++)
+                for (int x = 0; x < COLUMNS; x++)
+                    if (MoveIssue(spell, new Vector2Int(x, y), rotation, owned) == null) { Place(spell, new Vector2Int(x, y), rotation); return true; }
+        return false;
+    }
+
     /// <summary>아직 놓이지 않은 보유 도안을 기본 위치에, 막히면 비어 있는 첫 위치·회전에 놓는다.</summary>
     public void EnsurePlaced(IReadOnlyList<int> owned)
     {
@@ -176,31 +191,72 @@ public sealed class SpellPatternLayout
     /// <summary>화면에서 보이는 조각 회전을 도안 기준 회전으로 바꾼다.</summary>
     public int ToLocalRotation(int spell, int gridRotation) { return Wrap(gridRotation - _rotations[spell]); }
 
-    /// <summary>격자 기준 앵커 칸과 회전을 SpellGame이 쓰는 도안 기준 칸과 회전으로 바꾼다.</summary>
+    /// <summary>격자 기준 앵커 칸(조각 범위의 왼쪽 위)과 방향을 SpellGame이 쓰는 도안 기준 앵커와 방향으로 바꾼다.</summary>
     public void GridToLocalPlacement(int spell, SpellGame.Shape shape, Vector2Int anchor, int gridRotation, out Vector2Int local, out int localRotation)
     {
-        Vector2Int first = UnrotateCell(spell, _rotations[spell], anchor - _origins[spell]);
-        if (shape != SpellGame.Shape.Rectangle)
+        int patternRotation = _rotations[spell];
+        if (shape == SpellGame.Shape.Clay)
         {
-            local = first; localRotation = ToLocalRotation(spell, gridRotation); return;
+            local = UnrotateCell(spell, patternRotation, anchor - _origins[spell]); localRotation = 0; return;
         }
-        // 직사각형은 두 칸 중 작은 칸이 기준이고, 가로로 놓이면 짝수 회전이다.
-        Vector2Int second = UnrotateCell(spell, _rotations[spell], anchor + (gridRotation % 2 == 0 ? Vector2Int.right : Vector2Int.up) - _origins[spell]);
-        local = Vector2Int.Min(first, second);
-        localRotation = first.y == second.y ? 0 : 1;
+        List<SpellGame.ShapeCell> cells = new List<SpellGame.ShapeCell>();
+        foreach (SpellGame.ShapeCell cell in SpellGame.ShapeCells(shape, gridRotation))
+        {
+            Vector2Int l = UnrotateCell(spell, patternRotation, anchor + new Vector2Int(cell.X, cell.Y) - _origins[spell]);
+            cells.Add(new SpellGame.ShapeCell(l.x, l.y, RotateMask(cell.Mask, -patternRotation)));
+        }
+        local = Normalize(cells);
+        localRotation = MatchOrientation(shape, cells, Wrap(gridRotation - patternRotation));
     }
 
-    /// <summary>배치된 조각의 격자 기준 앵커 칸과 화면 회전을 반환한다. 직사각형은 두 칸 중 작은 칸이 앵커다.</summary>
+    /// <summary>배치된 조각의 격자 기준 앵커 칸(범위 왼쪽 위)과 화면 방향을 반환한다.</summary>
     public void PieceToGrid(int spell, SpellGame.Placement piece, out Vector2Int anchor, out int gridRotation)
     {
-        Vector2Int first = LocalToGrid(spell, new Vector2Int(piece.X, piece.Y));
-        if (piece.Card.Shape != SpellGame.Shape.Rectangle)
+        List<SpellGame.ShapeCell> cells = PlacementGridCells(spell, piece);
+        anchor = Normalize(cells);
+        gridRotation = piece.Card.Shape == SpellGame.Shape.Clay ? 0 : MatchOrientation(piece.Card.Shape, cells, Wrap(piece.Rotation + _rotations[spell]));
+    }
+
+    /// <summary>배치된 조각이 격자에서 차지하는 칸과 구역 마스크를 격자 좌표로 반환한다.</summary>
+    public List<SpellGame.ShapeCell> PlacementGridCells(int spell, SpellGame.Placement piece)
+    {
+        List<SpellGame.ShapeCell> cells = new List<SpellGame.ShapeCell>();
+        for (int y = 0; y < LOCAL_SIZE; y++) for (int x = 0; x < LOCAL_SIZE; x++)
         {
-            anchor = first; gridRotation = Wrap(piece.Rotation + _rotations[spell]); return;
+            int mask = piece.CellMask(x, y);
+            if (mask == 0) continue;
+            Vector2Int grid = LocalToGrid(spell, new Vector2Int(x, y));
+            cells.Add(new SpellGame.ShapeCell(grid.x, grid.y, RotateMask(mask, _rotations[spell])));
         }
-        Vector2Int second = LocalToGrid(spell, new Vector2Int(piece.X, piece.Y) + (piece.Rotation % 2 == 0 ? Vector2Int.right : Vector2Int.up));
-        anchor = Vector2Int.Min(first, second);
-        gridRotation = first.y == second.y ? 0 : 1;
+        return cells;
+    }
+
+    /// <summary>칸 목록을 범위 왼쪽 위가 (0, 0)이 되게 옮기고 원래 왼쪽 위 좌표를 반환한다.</summary>
+    private static Vector2Int Normalize(List<SpellGame.ShapeCell> cells)
+    {
+        Vector2Int min = new Vector2Int(int.MaxValue, int.MaxValue);
+        foreach (SpellGame.ShapeCell cell in cells) min = Vector2Int.Min(min, new Vector2Int(cell.X, cell.Y));
+        for (int i = 0; i < cells.Count; i++) cells[i] = new SpellGame.ShapeCell(cells[i].X - min.x, cells[i].Y - min.y, cells[i].Mask);
+        return min;
+    }
+
+    /// <summary>정규화된 칸 목록과 같은 모양인 도형 방향을 찾는다. 없으면 fallback을 반환한다.</summary>
+    private static int MatchOrientation(SpellGame.Shape shape, List<SpellGame.ShapeCell> cells, int fallback)
+    {
+        for (int rotation = 0; rotation < 4; rotation++)
+        {
+            IReadOnlyList<SpellGame.ShapeCell> candidate = SpellGame.ShapeCells(shape, rotation);
+            if (candidate.Count != cells.Count) continue;
+            bool same = true;
+            foreach (SpellGame.ShapeCell cell in cells)
+            {
+                bool found = false;
+                foreach (SpellGame.ShapeCell other in candidate) if (other.X == cell.X && other.Y == cell.Y && other.Mask == cell.Mask) found = true;
+                if (!found) { same = false; break; }
+            }
+            if (same) return rotation;
+        }
+        return fallback;
     }
 
     /// <summary>격자 구역의 이웃 구역(같은 칸의 양옆 구역 또는 옆 칸의 맞닿은 구역)을 반환한다.</summary>
