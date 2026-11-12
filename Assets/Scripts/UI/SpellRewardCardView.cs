@@ -36,10 +36,10 @@ public sealed class SpellRewardCardView : MonoBehaviour
         foreach (Image cell in _patternCells) cell.gameObject.SetActive(false);
     }
 
-    /// <summary>새 도안 보상을 1/4 구역 모양으로 표시한다.</summary>
-    public void BindPattern(int reward, string displayName, int spell, Color accent, Action<int> onChoose)
+    /// <summary>도안을 1/4 구역 모양으로 표시한다. kind는 카드 상단 종류 문구이며 기본값은 보상용 "새 도안"이다.</summary>
+    public void BindPattern(int reward, string displayName, int spell, Color accent, Action<int> onChoose, string kind = "새 도안")
     {
-        Bind(reward, "새 도안", displayName, accent, onChoose);
+        Bind(reward, kind, displayName, accent, onChoose);
         _shapeArea.gameObject.SetActive(true);
         _shapeArea.sizeDelta = (Vector2)SpellPatternLayout.BaseSize(spell) * PATTERN_CELL;
         _shape.SetPattern(spell); _shape.color = accent;
