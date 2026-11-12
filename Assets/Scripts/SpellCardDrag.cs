@@ -13,3 +13,4 @@ public sealed class SpellCardDrag : UnityEngine.MonoBehaviour, IBeginDragHandler
     public void OnDrag(PointerEventData eventData) { if (isActiveAndEnabled && (_ui.CanInteract || _ui.CanDragHammerCard || _ui.CanDragGlueCard) && eventData.button == PointerEventData.InputButton.Left) { _ui.MoveCardDrag(eventData.position); _ui.PreviewCardDrag(eventData); } }
     public void OnEndDrag(PointerEventData eventData) { if (isActiveAndEnabled && eventData.button == PointerEventData.InputButton.Left) _ui.EndCardDrag(eventData); }
 }
+

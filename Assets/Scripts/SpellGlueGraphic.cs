@@ -157,3 +157,4 @@ public sealed class SpellGlueGraphic : UnityEngine.UI.MaskableGraphic, IPointerC
         Triangle(vh, a + normal, b - normal, a - normal, color);
     }
 }
+

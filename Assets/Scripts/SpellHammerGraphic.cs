@@ -53,3 +53,4 @@ public sealed class SpellHammerGraphic : UnityEngine.UI.MaskableGraphic
         vertex.position = position; vertex.color = color; vh.AddVert(vertex);
     }
 }
+

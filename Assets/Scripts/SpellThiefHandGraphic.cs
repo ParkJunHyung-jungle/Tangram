@@ -58,3 +58,4 @@ public sealed class SpellThiefHandGraphic : UnityEngine.UI.MaskableGraphic, IPoi
         vh.AddTriangle(start, start + 1, start + 2); vh.AddTriangle(start, start + 2, start + 3);
     }
 }
+
