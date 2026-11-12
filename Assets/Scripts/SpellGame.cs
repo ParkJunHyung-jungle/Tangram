@@ -11,7 +11,7 @@ public sealed class SpellGame
     public enum SpellKind { Single, Block, All, Scatter }
     public enum Keyword { None, OneStroke, Mosaic, Purity }
 
-    public const int PATTERN_COUNT = 7;
+    public const int PATTERN_COUNT = 8;
     public const int MAX_HAND = 7;
     public const int MAX_HITS = 6;
     public const int SPARK_DAMAGE = 2;
@@ -116,18 +116,19 @@ public sealed class SpellGame
         }
     }
 
-    private static readonly string[] PATTERN_NAMES = { "불씨", "방벽", "번개", "유성", "섬광", "산탄", "만화경" };
-    private static readonly SpellKind[] PATTERN_KINDS = { SpellKind.Single, SpellKind.Block, SpellKind.Single, SpellKind.All, SpellKind.Single, SpellKind.Scatter, SpellKind.All };
-    private static readonly int[] PATTERN_BASE = { 6, 7, 12, 10, 8, 2, 6 };
-    private static readonly Keyword[] PATTERN_KEYWORDS = { Keyword.None, Keyword.None, Keyword.OneStroke, Keyword.None, Keyword.OneStroke, Keyword.Mosaic, Keyword.Purity };
+    private static readonly string[] PATTERN_NAMES = { "불씨", "방벽", "번개", "유성", "섬광", "산탄", "만화경", "강타" };
+    private static readonly SpellKind[] PATTERN_KINDS = { SpellKind.Single, SpellKind.Block, SpellKind.Single, SpellKind.All, SpellKind.Single, SpellKind.Scatter, SpellKind.All, SpellKind.Single };
+    private static readonly int[] PATTERN_BASE = { 6, 7, 12, 10, 8, 2, 6, 9 };
+    private static readonly Keyword[] PATTERN_KEYWORDS = { Keyword.None, Keyword.None, Keyword.OneStroke, Keyword.None, Keyword.OneStroke, Keyword.Mosaic, Keyword.Purity, Keyword.None };
     private static readonly int[][] SPELL_MASKS = {
-        new[] { 4, 0, 0, 15, 0, 0, 0, 0, 0 },
-        new[] { 15, 0, 0, 1, 0, 0, 0, 0, 0 },
+        new[] { 3, 8, 0, 0, 0, 0, 0, 0, 0 },
+        new[] { 2, 8, 0, 0, 0, 0, 0, 0, 0 },
         new[] { 15, 0, 0, 15, 15, 0, 0, 0, 0 },
         new[] { 15, 15, 0, 15, 15, 0, 0, 0, 0 },
         new[] { 15, 9, 0, 9, 0, 0, 0, 0, 0 },
         new[] { 6, 15, 12, 0, 0, 0, 0, 0, 0 },
-        new[] { 6, 12, 0, 3, 9, 0, 0, 0, 0 } };
+        new[] { 6, 12, 0, 3, 9, 0, 0, 0, 0 },
+        new[] { 15, 0, 0, 0, 0, 0, 0, 0, 0 } };
     private static readonly ShapeCell[][] BASE_SHAPES = {
         new[] { new ShapeCell(0, 0, 15) },
         new[] { new ShapeCell(0, 0, 3) },
@@ -340,12 +341,12 @@ public sealed class SpellGame
     {
         IsDeveloperMode = isDeveloperMode; MaxHealth = isDeveloperMode ? DEVELOPER_HEALTH : START_HEALTH;
         _owned.Clear(); _spells.Clear(); _ownedSpells.Clear(); _nextId = 0; Health = MaxHealth; Battle = 0; LastAcquiredPattern = -1;
-        int spellCount = isDeveloperMode ? PATTERN_COUNT : 2;
-        for (int i = 0; i < spellCount; i++) { _ownedSpells.Add(i); _spells.Add(i); }
-        for (int i = 0; i < 4; i++) AddCard(Shape.Square, Effect.None);
-        for (int i = 0; i < 4; i++) AddCard(Shape.Triangle, Effect.None);
-        for (int i = 0; i < 2; i++) AddCard(Shape.Rectangle, Effect.None);
+        if (isDeveloperMode) for (int i = 0; i < PATTERN_COUNT; i++) { _ownedSpells.Add(i); _spells.Add(i); }
+        else { _ownedSpells.Add(0); _ownedSpells.Add(1); _ownedSpells.Add(7); _spells.Add(0); _spells.Add(1); _spells.Add(7); }
         for (int i = 0; i < 4; i++) AddCard(Shape.QuarterTriangle, Effect.None);
+        for (int i = 0; i < 3; i++) AddCard(Shape.Triangle, Effect.None);
+        for (int i = 0; i < 4; i++) AddCard(Shape.Diamond, Effect.None);
+        AddCard(Shape.Square, Effect.None);
         StartBattle();
     }
 
