@@ -10,7 +10,6 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     private const float OUTLINE_WIDTH = 5f;
     private const float PREVIEW_INSET = 5f;
     private const float PREVIEW_WIDTH = 3f;
-    private const int SECTOR_COUNT = SpellPatternLayout.COLUMNS * SpellPatternLayout.ROWS * 4;
 
     [Header("칸")]
     [SerializeField] private float _cellSize = 120f;
@@ -31,7 +30,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
     [SerializeField] private Color _afterimageColor = new Color(0.333f, 0.78f, 0.702f);
     [SerializeField] private Color _persistedAfterimageColor = new Color(0.18f, 0.435f, 0.4f);
 
-    private readonly bool[] _targets = new bool[SECTOR_COUNT];
+    private bool[] _targets = new bool[0];
     private readonly Vector2[] _corners = new Vector2[4];
     private SpellGameUI _ui;
     private SpellGame _game;
@@ -132,7 +131,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
         int hoverSpell = -1;
         bool preview = !IsDraggingPattern && selected != null && _hoverX >= 0 && _layout.TryFindTarget(_hoverX, _hoverY, _hoverSector, owned, out hoverSpell);
         bool valid = preview && _ui.CanPreviewGrid(hoverSpell, new Vector2Int(_hoverX, _hoverY));
-        for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
+        for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
         {
             Vector2 center = CellGeometry(x * _cellSize, y * _cellSize, 0);
             for (int sector = 0; sector < 4; sector++)
@@ -141,7 +140,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
                 int owner;
                 if (_layout.TryFindOwner(x, y, sector, owned, out owner))
                 {
-                    color = _targets[(y * SpellPatternLayout.COLUMNS + x) * 4 + sector] ? _targetColor : _requiredColor;
+                    color = _targets[(y * _layout.Columns + x) * 4 + sector] ? _targetColor : _requiredColor;
                     Vector2Int local; int localSector;
                     _layout.GridToLocal(owner, x, y, sector, out local, out localSector);
                     IReadOnlyList<SpellGame.Placement> pieces = _game.Boards[owner].Pieces;
@@ -166,7 +165,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
                 {
                     int nx, ny, nSector, neighbor;
                     SpellPatternLayout.Neighbor(x, y, sector, direction, out nx, out ny, out nSector);
-                    bool same = nx >= 0 && nx < SpellPatternLayout.COLUMNS && ny >= 0 && ny < SpellPatternLayout.ROWS && _layout.TryFindOwner(nx, ny, nSector, owned, out neighbor) && neighbor == owner;
+                    bool same = nx >= 0 && nx < _layout.Columns && ny >= 0 && ny < _layout.Rows && _layout.TryFindOwner(nx, ny, nSector, owned, out neighbor) && neighbor == owner;
                     if (!same) EdgeLine(vh, center, sector, direction, OUTLINE_WIDTH, _ui.PatternColor(owner));
                 }
             }
@@ -210,19 +209,20 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
         int rotation = _ui.Rotation;
         if (!_targetsDirty && card == _targetsCard && rotation == _targetsRotation) return;
         _targetsDirty = false; _targetsCard = card; _targetsRotation = rotation;
+        if (_targets.Length != _layout.Columns * _layout.Rows * 4) _targets = new bool[_layout.Columns * _layout.Rows * 4];
         System.Array.Clear(_targets, 0, _targets.Length);
         if (card == null) return;
         IReadOnlyList<int> owned = _game.Spells;
         for (int i = 0; i < owned.Count; i++)
         {
             if (!_layout.IsPlaced(owned[i])) continue;
-            for (int ay = 0; ay < SpellPatternLayout.ROWS; ay++) for (int ax = 0; ax < SpellPatternLayout.COLUMNS; ax++)
+            for (int ay = 0; ay < _layout.Rows; ay++) for (int ax = 0; ax < _layout.Columns; ax++)
             {
                 if (!_ui.CanPreviewGrid(owned[i], new Vector2Int(ax, ay))) continue;
-                for (int y = ay; y <= Mathf.Min(ay + 1, SpellPatternLayout.ROWS - 1); y++) for (int x = ax; x <= Mathf.Min(ax + 1, SpellPatternLayout.COLUMNS - 1); x++)
+                for (int y = ay; y <= Mathf.Min(ay + 1, _layout.Rows - 1); y++) for (int x = ax; x <= Mathf.Min(ax + 1, _layout.Columns - 1); x++)
                 {
                     int mask = CellMask(card, ax, ay, rotation, x, y);
-                    for (int sector = 0; sector < 4; sector++) if ((mask & (1 << sector)) != 0) _targets[(y * SpellPatternLayout.COLUMNS + x) * 4 + sector] = true;
+                    for (int sector = 0; sector < 4; sector++) if ((mask & (1 << sector)) != 0) _targets[(y * _layout.Columns + x) * 4 + sector] = true;
                 }
             }
         }
@@ -256,7 +256,7 @@ public sealed class SpellBoardGraphic : UnityEngine.UI.MaskableGraphic, IPointer
         x = y = sector = 0; Vector2 pixels;
         if (!ToGridPixels(data, position, out pixels)) return false;
         float u = pixels.x / _cellSize, v = pixels.y / _cellSize;
-        if (u < 0 || u >= SpellPatternLayout.COLUMNS || v < 0 || v >= SpellPatternLayout.ROWS) return false;
+        if (u < 0 || u >= _layout.Columns || v < 0 || v >= _layout.Rows) return false;
         x = (int)u; y = (int)v; float dx = u - x - 0.5f, dy = v - y - 0.5f;
         sector = Mathf.Abs(dx) > Mathf.Abs(dy) ? (dx > 0 ? 1 : 3) : (dy > 0 ? 2 : 0); return true;
     }

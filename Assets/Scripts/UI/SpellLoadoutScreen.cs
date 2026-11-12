@@ -10,7 +10,7 @@ public sealed class SpellLoadoutScreen : MonoBehaviour
 {
     private const float STORAGE_SCALE = 0.62f;
     private const float STORAGE_GAP = 12f;
-    private const string DEFAULT_HINT = "도안을 클릭해 들고 격자를 클릭해 놓습니다 · R / 우클릭 회전 · 보관함을 클릭하면 장착 해제";
+    private const string DEFAULT_HINT = "도안 클릭 후 격자에 놓기 · R / 우클릭 회전 · 방향키로 격자 이동 · 보관함 클릭으로 장착 해제";
 
     [Header("구성")]
     [SerializeField] private SpellLoadoutGrid _grid;
@@ -44,6 +44,12 @@ public sealed class SpellLoadoutScreen : MonoBehaviour
 
     void Update()
     {
+        if (Keyboard.current != null)
+        {
+            Vector2 direction = new Vector2((Keyboard.current.rightArrowKey.isPressed ? 1 : 0) - (Keyboard.current.leftArrowKey.isPressed ? 1 : 0),
+                (Keyboard.current.upArrowKey.isPressed ? 1 : 0) - (Keyboard.current.downArrowKey.isPressed ? 1 : 0));
+            if (direction.sqrMagnitude > 0) _grid.Pan(direction.normalized * (300f * Time.unscaledDeltaTime));
+        }
         if (_held < 0) return;
         bool rotate = (Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame) || (Mouse.current != null && Mouse.current.rightButton.wasPressedThisFrame);
         if (rotate) { _heldRotation = (_heldRotation + 1) % 4; _grid.SetHeld(_held, _heldRotation); }
@@ -53,6 +59,7 @@ public sealed class SpellLoadoutScreen : MonoBehaviour
     /// <summary>보관함 카드와 격자를 현재 배치로 다시 그리고 안내를 기본 문구로 되돌린다.</summary>
     public void Refresh()
     {
+        _grid.RefreshSize();
         List<int> stored = new List<int>();
         foreach (int spell in _owned) if (!_layout.IsPlaced(spell) && spell != _held) stored.Add(spell);
         while (_cards.Count < stored.Count) _cards.Add(Instantiate(_storageTemplate, _storage));

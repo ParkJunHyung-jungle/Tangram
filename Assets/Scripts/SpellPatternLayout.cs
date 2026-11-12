@@ -7,6 +7,12 @@ public sealed class SpellPatternLayout
 {
     public const int COLUMNS = 4;
     public const int ROWS = 3;
+    public int Columns { get; private set; } = COLUMNS;
+    public int Rows { get; private set; } = ROWS;
+
+    /// <summary>격자 크기를 설정하고 기존 도안 배치를 유지한다.</summary>
+    public void SetSize(int columns, int rows) { Columns = Mathf.Max(COLUMNS, columns); Rows = Mathf.Max(ROWS, rows); }
+
     private const int PATTERN_COUNT = SpellGame.PATTERN_COUNT;
     private const int LOCAL_SIZE = 3;
     private const int FULL_MASK = 15;
@@ -115,7 +121,7 @@ public sealed class SpellPatternLayout
             int gx = origin.x + x, gy = origin.y + y;
             int mask = GridMask(spell, origin, rotation, gx, gy);
             if (mask == 0) continue;
-            if (gx < 0 || gx >= COLUMNS || gy < 0 || gy >= ROWS) return "도안이 격자 밖으로 나갑니다";
+            if (gx < 0 || gx >= Columns || gy < 0 || gy >= Rows) return "도안이 격자 밖으로 나갑니다";
             for (int i = 0; i < owned.Count; i++)
                 if (owned[i] != spell && (PlacedMask(owned[i], gx, gy) & mask) != 0) return "다른 도안과 겹칩니다";
         }
@@ -137,8 +143,8 @@ public sealed class SpellPatternLayout
         if (_placed[spell]) return true;
         if (MoveIssue(spell, _origins[spell], _rotations[spell], owned) == null) { Place(spell, _origins[spell], _rotations[spell]); return true; }
         for (int rotation = 0; rotation < 4; rotation++)
-            for (int y = 0; y < ROWS; y++)
-                for (int x = 0; x < COLUMNS; x++)
+            for (int y = 0; y < Rows; y++)
+                for (int x = 0; x < Columns; x++)
                     if (MoveIssue(spell, new Vector2Int(x, y), rotation, owned) == null) { Place(spell, new Vector2Int(x, y), rotation); return true; }
         return false;
     }
@@ -152,8 +158,8 @@ public sealed class SpellPatternLayout
             if (_placed[spell]) continue;
             if (MoveIssue(spell, _origins[spell], _rotations[spell], owned) == null) { Place(spell, _origins[spell], _rotations[spell]); continue; }
             for (int rotation = 0; rotation < 4 && !_placed[spell]; rotation++)
-                for (int y = 0; y < ROWS && !_placed[spell]; y++)
-                    for (int x = 0; x < COLUMNS && !_placed[spell]; x++)
+                for (int y = 0; y < Rows && !_placed[spell]; y++)
+                    for (int x = 0; x < Columns && !_placed[spell]; x++)
                         if (MoveIssue(spell, new Vector2Int(x, y), rotation, owned) == null) Place(spell, new Vector2Int(x, y), rotation);
         }
     }

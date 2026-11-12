@@ -34,12 +34,18 @@ public sealed class SpellTable3D : MonoBehaviour
     private SpellCombatScreen _screen;
     private Transform _world;
     private Transform _boardRoot;
+    private Transform _gridLines;
+    private Transform _boardSurface;
+    private int _gridColumns;
+    private int _gridRows;
+    private int _handPage;
     private Transform _handRoot;
     private Transform _patterns;
     private Transform _preview;
     private Camera _camera;
     private Transform _handSurface;
     private float _cellSize;
+    private Vector3 _boardPan;
     private PhysicsMaterial _physicsMaterial;
     private PointerEventData _pointer;
     private InputAction _pickAction;
@@ -94,6 +100,7 @@ public sealed class SpellTable3D : MonoBehaviour
         _boardRoot = _world.Find("Grid 3 x 4");
         _handRoot = _world.Find("Physical Hand");
         Transform boardSurface = _boardRoot.Find("Board slab");
+        _boardSurface = boardSurface;
         _handSurface = _handRoot.Find("Hand tray");
         Vector3 boardSize = boardSurface.localScale;
         _cellSize = Mathf.Max(0.1f, (boardSize.x - 0.22f) / SpellPatternLayout.COLUMNS);
@@ -105,7 +112,8 @@ public sealed class SpellTable3D : MonoBehaviour
         _handSurface.GetComponent<BoxCollider>().sharedMaterial = _physicsMaterial;
         _patterns = CreateRoot("Spell Outlines", _boardRoot);
         _preview = CreateRoot("Template Preview", _boardRoot);
-        BuildSurfaces();
+        _gridLines = CreateRoot("Grid Lines", _boardRoot);
+        RebuildGrid();
         ConfigureCamera();
         _screen.Board.enabled = false;
         _screen.HandDropArea.gameObject.SetActive(false);
@@ -127,16 +135,27 @@ public sealed class SpellTable3D : MonoBehaviour
         Material material = new Material(source); material.color = color; _materials.Add(material); return material;
     }
 
-    /// <summary>판·손패 받침을 실제 박스 충돌체와 두께가 있는 메시로 만든다.</summary>
+    /// <summary>현재 격자 크기에 맞춰 판과 격자선을 갱신한다.</summary>
+    private void RebuildGrid()
+    {
+        _gridColumns = _layout.Columns; _gridRows = _layout.Rows;
+        Vector3 size = _boardSurface.localScale;
+        size.x = _cellSize * _gridColumns + 0.22f; size.z = _cellSize * _gridRows + 0.22f;
+        _boardSurface.localScale = size;
+        foreach (Transform line in _gridLines) Destroy(line.gameObject);
+        BuildSurfaces();
+    }
+
+    /// <summary>현재 격자 크기에 맞춰 격자선을 만든다.</summary>
     private void BuildSurfaces()
     {
         Material grid = Colored(_lineMaterial, new Color(0.46f, 0.49f, 0.57f));
-        for (int y = 0; y < 3; y++) for (int x = 0; x < 4; x++)
+        for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
         {
             Vector2 a = new Vector2(x, y), b = new Vector2(x + 1, y), c = new Vector2(x + 1, y + 1), d = new Vector2(x, y + 1);
-            Line(_boardRoot, new[] { GridLocal(a), GridLocal(b), GridLocal(c), GridLocal(d), GridLocal(a) }, grid, 0.016f);
-            Line(_boardRoot, new[] { GridLocal(a), GridLocal(c) }, grid, 0.016f);
-            Line(_boardRoot, new[] { GridLocal(b), GridLocal(d) }, grid, 0.016f);
+            Line(_gridLines, new[] { GridLocal(a), GridLocal(b), GridLocal(c), GridLocal(d), GridLocal(a) }, grid, 0.016f);
+            Line(_gridLines, new[] { GridLocal(a), GridLocal(c) }, grid, 0.016f);
+            Line(_gridLines, new[] { GridLocal(b), GridLocal(d) }, grid, 0.016f);
         }
     }
 
@@ -152,7 +171,7 @@ public sealed class SpellTable3D : MonoBehaviour
     /// <summary>격자 좌표를 판 중심 기준 월드 축 방향의 로컬 좌표로 바꾼다.</summary>
     private Vector3 GridLocal(Vector2 point, float height = 0.025f)
     {
-        return new Vector3((point.x - 2f) * _cellSize, height, (1.5f - point.y) * _cellSize);
+        return new Vector3((point.x - _layout.Columns * 0.5f) * _cellSize, height, (_layout.Rows * 0.5f - point.y) * _cellSize);
     }
 
     /// <summary>Inspector 각도로 카메라를 조정하고 판과 손패를 목표 화면 위치에 놓는다.</summary>
@@ -161,7 +180,7 @@ public sealed class SpellTable3D : MonoBehaviour
         _camera.transform.rotation = Quaternion.Euler(_cameraAngle, 0, 0);
         _camera.transform.position = WORLD_ORIGIN - _camera.transform.forward * 15f;
         _camera.orthographicSize = _cameraSize;
-        _boardRoot.position = ViewportOnTable(ViewportCenter(_screen.Board.rectTransform));
+        _boardRoot.position = ViewportOnTable(ViewportCenter(_screen.Board.rectTransform)) + _boardPan;
         _handRoot.position = ViewportOnTable(ViewportCenter(_screen.HandDropArea));
         FitHandTray();
         _lastAngle = _cameraAngle; _lastAspect = _camera.aspect;
@@ -204,28 +223,51 @@ public sealed class SpellTable3D : MonoBehaviour
         if (_world != null) _world.gameObject.SetActive(visible);
     }
 
+    /// <summary>조각 집기와 도안 이동 및 시전 드래그를 취소한다.</summary>
+    public void CancelInteractions()
+    {
+        CancelPick(); _castSource = _dragTemplate = -1;
+        _isCastDragging = _isTemplateDragging = false;
+        _hasPress = _hasRelease = false; _requestedRotations = 0;
+    }
+
     /// <summary>모델의 손패·배치 상태와 3D 조각을 동기화하고 새 손패만 낙하시킨다.</summary>
     public void Sync()
     {
+        bool resized = _gridColumns != _layout.Columns || _gridRows != _layout.Rows;
+        if (resized) RebuildGrid();
+        _handPage = Mathf.Clamp(_handPage, 0, Mathf.Max(0, (_game.Hand.Count - 1) / 9));
         CancelPick(); Vector3 previousHandPosition = _handRoot.position;
         Canvas.ForceUpdateCanvases(); ConfigureCamera();
         Vector3 handOffset = _handRoot.position - previousHandPosition;
         if (handOffset.sqrMagnitude > 0.000001f)
             foreach (SpellPiece3D piece in _pieces.Values) if (piece.IsHand) piece.Body.position += handOffset;
         _activeCards.Clear();
-        foreach (SpellGame.Card card in _game.Hand) _activeCards.Add(card.Id);
+        for (int i = _handPage * 9; i < Mathf.Min(_game.Hand.Count, (_handPage + 1) * 9); i++) _activeCards.Add(_game.Hand[i].Id);
         foreach (int spell in _game.Spells) foreach (SpellGame.Placement piece in _game.Boards[spell].Pieces) _activeCards.Add(piece.Card.Id);
         _removed.Clear();
         foreach (KeyValuePair<int, SpellPiece3D> entry in _pieces) if (!_activeCards.Contains(entry.Key)) _removed.Add(entry.Key);
         foreach (int id in _removed) { Destroy(_pieces[id].gameObject); _pieces.Remove(id); }
-        foreach (SpellGame.Card card in _game.Hand)
+        for (int i = _handPage * 9; i < Mathf.Min(_game.Hand.Count, (_handPage + 1) * 9); i++)
         {
+            SpellGame.Card card = _game.Hand[i];
             SpellPiece3D piece = GetPiece(card);
-            if (piece.IsHand) continue;
+            if (piece.IsHand)
+            {
+                if (resized) piece.DropToHand(piece.Slot, SlotPosition(piece.Slot), _cellSize, 0.2f);
+                continue;
+            }
             int slot = FreeSlot(); piece.DropToHand(slot, SlotPosition(slot), _cellSize, _dropHeight + Random.Range(0f, 0.45f));
         }
         foreach (int spell in _game.Spells) foreach (SpellGame.Placement placement in _game.Boards[spell].Pieces) PlaceOnBoard(GetPiece(placement.Card), spell, placement);
         RebuildPatterns(); ProjectControls();
+    }
+
+    /// <summary>손패 페이지를 변경하고 해당 페이지의 조각을 표시한다.</summary>
+    public void ChangeHandPage(int direction)
+    {
+        _handPage = Mathf.Clamp(_handPage + direction, 0, Mathf.Max(0, (_game.Hand.Count - 1) / 9));
+        Sync();
     }
 
     /// <summary>배치 조각을 격자 칸 모양과 위치에 고정한다. 다른 조각 위에 겹친 덧칠 조각은 한 층 위에 놓는다.</summary>
@@ -299,7 +341,7 @@ public sealed class SpellTable3D : MonoBehaviour
         Ray ray = _camera.ScreenPointToRay(screenPosition); Plane plane = new Plane(Vector3.up, _boardRoot.position);
         if (!plane.Raycast(ray, out float distance)) { grid = default; return false; }
         Vector3 local = _boardRoot.InverseTransformPoint(ray.GetPoint(distance));
-        grid = new Vector2(local.x / _cellSize + 2f, 1.5f - local.z / _cellSize); return true;
+        grid = new Vector2(local.x / _cellSize + _layout.Columns * 0.5f, _layout.Rows * 0.5f - local.z / _cellSize); return true;
     }
 
     /// <summary>도안의 삼각 구역을 얇은 입체로 채우고 외부 경계에만 주문 색 외곽선을 그린다.</summary>
@@ -329,7 +371,7 @@ public sealed class SpellTable3D : MonoBehaviour
     private void DrawPattern(Transform parent, int spell, Vector2Int origin, int rotation, Material fill, Material border)
     {
         List<Vector3> vertices = new List<Vector3>(); List<int> triangles = new List<int>();
-        for (int y = 0; y < 3; y++) for (int x = 0; x < 4; x++)
+        for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
         {
             int mask = SpellPatternLayout.GridMask(spell, origin, rotation, x, y);
             Vector2[] corners = { new Vector2(x, y), new Vector2(x + 1, y), new Vector2(x + 1, y + 1), new Vector2(x, y + 1) };
@@ -364,7 +406,7 @@ public sealed class SpellTable3D : MonoBehaviour
         {
             if (!_layout.IsPlaced(spell)) continue;
             Vector2 min = Vector2.positiveInfinity, max = Vector2.negativeInfinity, sum = Vector2.zero; int weight = 0;
-            for (int y = 0; y < 3; y++) for (int x = 0; x < 4; x++)
+            for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
             {
                 int mask = _layout.PlacedMask(spell, x, y);
                 for (int sector = 0; sector < 4; sector++)
@@ -386,7 +428,7 @@ public sealed class SpellTable3D : MonoBehaviour
                 foreach (int other in _game.Spells)
                 {
                     if (other == spell || !_layout.IsPlaced(other)) continue;
-                    for (int y = 0; y < 3; y++) for (int x = 0; x < 4; x++)
+                    for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
                     {
                         if (_layout.PlacedMask(other, x, y) == 0) continue;
                         Vector2 p = OverlayPoint(parent, new Vector2(x, y)); Vector2 q = OverlayPoint(parent, new Vector2(x + 1, y + 1));
@@ -422,6 +464,12 @@ public sealed class SpellTable3D : MonoBehaviour
         RefreshTemplatePreview();
         if (!_ui.CanInteract) { CancelPick(); return; }
         if (_screen.MoreMenu.IsOpen) { CancelPick(); return; }
+        if (!IsDragging && Keyboard.current != null)
+        {
+            Vector2 direction = new Vector2((Keyboard.current.rightArrowKey.isPressed ? 1 : 0) - (Keyboard.current.leftArrowKey.isPressed ? 1 : 0),
+                (Keyboard.current.upArrowKey.isPressed ? 1 : 0) - (Keyboard.current.downArrowKey.isPressed ? 1 : 0));
+            if (direction.sqrMagnitude > 0) PanBoard(direction.normalized * (3f * Time.unscaledDeltaTime));
+        }
         if (Mouse.current == null) return;
         Vector2 pointer = Mouse.current.position.ReadValue();
         if (pressed && _castSource < 0 && _dragTemplate < 0) BeginOverlayInput();
@@ -456,6 +504,15 @@ public sealed class SpellTable3D : MonoBehaviour
         else if (ScreenToGrid(pointer, out Vector2 grid) && OnGrid(grid) && _layout.TryFindTarget((int)grid.x, (int)grid.y, Sector(grid), _game.Spells, out int spell))
         { _ui.ShowPatternTooltip(spell, pointer, hovered == null ? null : hovered.Card); _hadTableHover = true; }
         else HideHover(pointer);
+    }
+
+    /// <summary>격자와 배치된 조각을 방향키 입력만큼 이동하고 화면의 도안 조작 위치를 갱신한다.</summary>
+    private void PanBoard(Vector2 direction)
+    {
+        Vector3 delta = new Vector3(direction.x, 0, direction.y);
+        _boardPan += delta; _boardRoot.position += delta;
+        foreach (SpellPiece3D piece in _pieces.Values) if (!piece.IsHand) piece.Body.position += delta;
+        ProjectControls();
     }
 
     /// <summary>입력 이벤트 시점의 누른 위치를 저장해 한 프레임 안에 끝난 빠른 드래그도 보존한다.</summary>
@@ -546,7 +603,7 @@ public sealed class SpellTable3D : MonoBehaviour
     }
 
     /// <summary>소수 격자 위치가 판 안에 있는지 반환한다.</summary>
-    private static bool OnGrid(Vector2 grid) { return grid.x >= 0 && grid.x < 4 && grid.y >= 0 && grid.y < 3; }
+    private bool OnGrid(Vector2 grid) { return grid.x >= 0 && grid.x < _layout.Columns && grid.y >= 0 && grid.y < _layout.Rows; }
 
     /// <summary>칸 중심에서 포인터가 향한 상·우·하·좌 삼각 구역을 반환한다.</summary>
     private static int Sector(Vector2 grid)
@@ -566,7 +623,7 @@ public sealed class SpellTable3D : MonoBehaviour
         for (int r = 0; r < 4 && piece.IsHand; r++)
         {
             bool valid = false;
-            foreach (int spell in _game.Spells) for (int y = 0; y < 3; y++) for (int x = 0; x < 4; x++)
+            foreach (int spell in _game.Spells) for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
             {
                 _layout.GridToLocalPlacement(spell, piece.Card.Shape, new Vector2Int(x, y), r, out Vector2Int local, out int localRotation);
                 if (_layout.IsPlaced(spell) && _game.CanPlace(spell, piece.Card, local.x, local.y, localRotation, piece.Board == spell ? piece.Placement : null)) valid = true;
