@@ -101,24 +101,24 @@ public sealed class SpellPiece3D : MonoBehaviour
         SetTint(_color);
     }
 
-    /// <summary>논리 배치의 격자 칸 모양과 위치에 조각을 고정하고 물리 이동을 멈춘다.</summary>
-    public void PlaceOnBoard(int board, SpellGame.Placement placement, IReadOnlyList<SpellGame.ShapeCell> cells, Vector3 position, float scale)
+    /// <summary>논리 배치의 격자 칸 모양과 위치, 판 격자 방향(rotation)에 조각을 고정하고 물리 이동을 멈춘다.</summary>
+    public void PlaceOnBoard(int board, SpellGame.Placement placement, IReadOnlyList<SpellGame.ShapeCell> cells, Vector3 position, Quaternion rotation, float scale)
     {
         _isHand = false; _slot = -1; _board = board; _placement = placement;
         gameObject.SetActive(true); _body.isKinematic = true; _collider.enabled = true;
         SetCells(cells);
-        transform.SetPositionAndRotation(position, Quaternion.identity);
+        transform.SetPositionAndRotation(position, rotation);
         transform.localScale = Vector3.one * scale;
         SetTint(placement.HasPersisted ? _color * 0.72f : _color);
     }
 
-    /// <summary>집은 조각을 격자 크기와 지정 칸 모양으로 바꾸고 충돌·중력을 잠시 중단한다.</summary>
-    public void Pick(float scale, IReadOnlyList<SpellGame.ShapeCell> cells)
+    /// <summary>집은 조각을 격자 크기와 지정 칸 모양, 판 격자 방향(rotation)으로 바꾸고 충돌·중력을 잠시 중단한다.</summary>
+    public void Pick(float scale, IReadOnlyList<SpellGame.ShapeCell> cells, Quaternion rotation)
     {
         _body.isKinematic = true; _collider.enabled = false;
         SetCells(cells);
         transform.localScale = Vector3.one * scale;
-        transform.rotation = Quaternion.identity;
+        transform.rotation = rotation;
     }
 
     /// <summary>현재 조각의 물리 표시 색을 지정 색으로 갱신한다.</summary>

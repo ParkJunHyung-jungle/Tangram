@@ -3,22 +3,27 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>공유 격자 위 도안의 위치·회전과 1/4 구역 점유를 관리하고, 격자 좌표와 도안 기준 좌표를 서로 변환한다.</summary>
+/// <remarks>격자는 화면에서 45도 돌아간 마름모 칸으로 표시된다. 격자 +x는 화면 오른쪽 아래, +y는 왼쪽 아래를 향하고, 판은 화면 기준 마름모 2×2 크기의 수평 정사각형이다.</remarks>
 public sealed class SpellPatternLayout
 {
     public const int COLUMNS = 4;
-    public const int ROWS = 3;
-    public int Columns { get; private set; } = COLUMNS;
-    public int Rows { get; private set; } = ROWS;
-
-    /// <summary>격자 크기를 설정하고 기존 도안 배치를 유지한다.</summary>
-    public void SetSize(int columns, int rows) { Columns = Mathf.Max(COLUMNS, columns); Rows = Mathf.Max(ROWS, rows); }
-
+    public const int ROWS = 4;
+    // 화면 기준 판 한 변의 길이를 격자 칸 한 변 단위로 나타낸 값이다.
+    public const float BOARD_SIZE = 2 * SQRT2;
     private const int PATTERN_COUNT = SpellGame.PATTERN_COUNT;
     private const int LOCAL_SIZE = 3;
     private const int FULL_MASK = 15;
+    private const float SQRT2 = 1.41421356f;
 
-    private static readonly Vector2Int[] DEFAULT_ORIGINS = { new Vector2Int(0, 0), new Vector2Int(0, 0), new Vector2Int(1, 1), new Vector2Int(2, 0), new Vector2Int(2, 1), new Vector2Int(1, 0), new Vector2Int(2, 1) };
-    private static readonly int[] DEFAULT_ROTATIONS = { 0, 1, 0, 0, 0, 0, 0 };
+    private static readonly Vector2 BOARD_CENTER = new Vector2(2, 2);
+    // 판 모서리가 마름모 꼭짓점에 오도록 자른 칸별 유효 구역이다. 경계 칸은 반쪽 마름모(2구역)다.
+    private static readonly int[] BOARD_MASK = {
+        0, 6, 12, 0,
+        6, 15, 15, 12,
+        3, 15, 15, 9,
+        0, 3, 9, 0 };
+    private static readonly Vector2Int[] DEFAULT_ORIGINS = { new Vector2Int(1, 1), new Vector2Int(2, 2), new Vector2Int(1, 1), new Vector2Int(1, 1), new Vector2Int(1, 1), new Vector2Int(0, 1), new Vector2Int(1, 1), new Vector2Int(1, 2) };
+    private static readonly int[] DEFAULT_ROTATIONS = { 0, 0, 0, 0, 0, 0, 0, 0 };
     private static readonly Vector2Int[] SIDE_OFFSETS = { new Vector2Int(0, -1), new Vector2Int(1, 0), new Vector2Int(0, 1), new Vector2Int(-1, 0) };
 
     private readonly Vector2Int[] _origins = new Vector2Int[PATTERN_COUNT];
@@ -35,6 +40,34 @@ public sealed class SpellPatternLayout
     public void Reset()
     {
         for (int i = 0; i < PATTERN_COUNT; i++) { _origins[i] = DEFAULT_ORIGINS[i]; _rotations[i] = DEFAULT_ROTATIONS[i]; _placed[i] = false; }
+    }
+
+    /// <summary>격자 칸 (x, y)에서 판에 속한 구역 마스크를 반환한다. 판 범위 밖이면 0이다.</summary>
+    public static int BoardMask(int x, int y)
+    {
+        return x < 0 || x >= COLUMNS || y < 0 || y >= ROWS ? 0 : BOARD_MASK[y * COLUMNS + x];
+    }
+
+    /// <summary>소수 격자 위치가 판에 속한 구역 위에 있는지 반환한다.</summary>
+    public static bool Contains(Vector2 grid)
+    {
+        int x = Mathf.FloorToInt(grid.x), y = Mathf.FloorToInt(grid.y);
+        float dx = grid.x - x - 0.5f, dy = grid.y - y - 0.5f;
+        int sector = Mathf.Abs(dx) > Mathf.Abs(dy) ? (dx > 0 ? 1 : 3) : (dy > 0 ? 2 : 0);
+        return (BoardMask(x, y) & (1 << sector)) != 0;
+    }
+
+    /// <summary>격자 좌표를 판 중심 기준 화면 방향 좌표(x 오른쪽, y 아래, 칸 한 변 단위)로 바꾼다.</summary>
+    public static Vector2 GridToBoard(Vector2 grid)
+    {
+        Vector2 d = grid - BOARD_CENTER;
+        return new Vector2(d.x - d.y, d.x + d.y) / SQRT2;
+    }
+
+    /// <summary>판 중심 기준 화면 방향 좌표(x 오른쪽, y 아래, 칸 한 변 단위)를 격자 좌표로 바꾼다.</summary>
+    public static Vector2 BoardToGrid(Vector2 board)
+    {
+        return BOARD_CENTER + new Vector2(board.x + board.y, board.y - board.x) / SQRT2;
     }
 
     /// <summary>도안이 격자에 놓여 있는지 반환한다.</summary>
@@ -121,7 +154,7 @@ public sealed class SpellPatternLayout
             int gx = origin.x + x, gy = origin.y + y;
             int mask = GridMask(spell, origin, rotation, gx, gy);
             if (mask == 0) continue;
-            if (gx < 0 || gx >= Columns || gy < 0 || gy >= Rows) return "도안이 격자 밖으로 나갑니다";
+            if ((mask & ~BoardMask(gx, gy)) != 0) return "도안이 격자 밖으로 나갑니다";
             for (int i = 0; i < owned.Count; i++)
                 if (owned[i] != spell && (PlacedMask(owned[i], gx, gy) & mask) != 0) return "다른 도안과 겹칩니다";
         }
@@ -143,8 +176,8 @@ public sealed class SpellPatternLayout
         if (_placed[spell]) return true;
         if (MoveIssue(spell, _origins[spell], _rotations[spell], owned) == null) { Place(spell, _origins[spell], _rotations[spell]); return true; }
         for (int rotation = 0; rotation < 4; rotation++)
-            for (int y = 0; y < Rows; y++)
-                for (int x = 0; x < Columns; x++)
+            for (int y = 0; y < ROWS; y++)
+                for (int x = 0; x < COLUMNS; x++)
                     if (MoveIssue(spell, new Vector2Int(x, y), rotation, owned) == null) { Place(spell, new Vector2Int(x, y), rotation); return true; }
         return false;
     }
@@ -158,8 +191,8 @@ public sealed class SpellPatternLayout
             if (_placed[spell]) continue;
             if (MoveIssue(spell, _origins[spell], _rotations[spell], owned) == null) { Place(spell, _origins[spell], _rotations[spell]); continue; }
             for (int rotation = 0; rotation < 4 && !_placed[spell]; rotation++)
-                for (int y = 0; y < Rows && !_placed[spell]; y++)
-                    for (int x = 0; x < Columns && !_placed[spell]; x++)
+                for (int y = 0; y < ROWS && !_placed[spell]; y++)
+                    for (int x = 0; x < COLUMNS && !_placed[spell]; x++)
                         if (MoveIssue(spell, new Vector2Int(x, y), rotation, owned) == null) Place(spell, new Vector2Int(x, y), rotation);
         }
     }

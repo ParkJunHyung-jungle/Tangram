@@ -46,7 +46,7 @@ public sealed class SpellGameUI : MonoBehaviour
     [SerializeField] private GameObject _background;
 
     [Header("상태 색")]
-    [SerializeField] private Color[] _patternColors = { new Color(0.957f, 0.788f, 0.365f), new Color(0.902f, 0.922f, 0.941f), new Color(0.725f, 0.89f, 0.42f), new Color(0.949f, 0.553f, 0.698f), new Color(0.55f, 0.85f, 0.95f), new Color(0.96f, 0.6f, 0.35f), new Color(0.72f, 0.62f, 0.98f) };
+    [SerializeField] private Color[] _patternColors = { new Color(0.957f, 0.788f, 0.365f), new Color(0.902f, 0.922f, 0.941f), new Color(0.725f, 0.89f, 0.42f), new Color(0.949f, 0.553f, 0.698f), new Color(0.55f, 0.85f, 0.95f), new Color(0.96f, 0.6f, 0.35f), new Color(0.72f, 0.62f, 0.98f), new Color(0.9f, 0.35f, 0.35f) };
     [SerializeField] private Color _flameColor = new Color(0.878f, 0.478f, 0.247f);
     [SerializeField] private Color _guardColor = new Color(0.31f, 0.584f, 0.839f);
     [SerializeField] private Color _resonanceColor = new Color(0.655f, 0.467f, 0.851f);
@@ -436,14 +436,14 @@ public sealed class SpellGameUI : MonoBehaviour
     private void StartNewGame()
     {
         ResetTheft(); _isSealerRun = _isThiefRun = _isCurserRun = false;
-        _game.StartGame(); _layout.SetSize(4, 3); ResetPatterns(); ClearSelection(); Render();
+        _game.StartGame(); ResetPatterns(); ClearSelection(); Render();
     }
 
-    /// <summary>개발자 전투를 시작하고 모든 도안을 확장 격자에 배치한다.</summary>
+    /// <summary>개발자 전투를 시작하고 판에 들어가는 만큼 모든 도안을 배치한다.</summary>
     private void StartDeveloperGame()
     {
         ResetTheft(); _isSealerRun = _isThiefRun = _isCurserRun = false;
-        _game.StartGame(true); _layout.SetSize(5, 6); ResetPatterns();
+        _game.StartGame(true); ResetPatterns();
         _layout.EnsurePlaced(_game.Spells); ClearSelection(); Render();
     }
 
@@ -502,15 +502,13 @@ public sealed class SpellGameUI : MonoBehaviour
                 () =>
                 {
                     if (_game.Spells.Contains(spell)) _debugNotice = "이미 장착한 도안입니다.";
-                    else if (!_layout.TryAutoPlace(spell, _game.Spells)) _debugNotice = "빈 공간이 부족합니다. 격자를 확장해 주세요.";
+                    else if (!_layout.TryAutoPlace(spell, _game.Spells)) _debugNotice = "빈 공간이 부족합니다.";
                     else { _game.AddDebugPattern(spell); _debugNotice = "도안을 배치했습니다."; }
                     Render(); RefreshDebugRemote();
                 });
         }
-        Button(_debugContents, "열 +1", 1000, 305, 200, 40, () => { _layout.SetSize(_layout.Columns + 1, _layout.Rows); Render(); RefreshDebugRemote(); });
-        Button(_debugContents, "행 +1", 1210, 305, 200, 40, () => { _layout.SetSize(_layout.Columns, _layout.Rows + 1); Render(); RefreshDebugRemote(); });
         Label(_debugContents, _debugNotice, 1000, 350, 410, 35, 16, TextAnchor.MiddleLeft);
-        Label(_debugContents, $"격자 {_layout.Columns} × {_layout.Rows} · 덱 {_game.OwnedCards.Count}장 · 손패 {_game.Hand.Count}장", 20, 390, 1000, 35, 20, TextAnchor.MiddleLeft);
+        Label(_debugContents, $"덱 {_game.OwnedCards.Count}장 · 손패 {_game.Hand.Count}장", 20, 390, 1000, 35, 20, TextAnchor.MiddleLeft);
         int maxPage = Mathf.Max(0, (_game.OwnedCards.Count - 1) / 16); _debugPage = Mathf.Clamp(_debugPage, 0, maxPage);
         Button(_debugContents, "이전", 1050, 390, 120, 40, () => { _debugPage--; RefreshDebugRemote(); });
         Button(_debugContents, $"다음 {_debugPage + 1}/{maxPage + 1}", 1180, 390, 230, 40, () => { _debugPage++; RefreshDebugRemote(); });
@@ -631,7 +629,7 @@ public sealed class SpellGameUI : MonoBehaviour
     private Rect PatternBounds(int spell, float cell)
     {
         float left = float.PositiveInfinity, top = float.PositiveInfinity, right = float.NegativeInfinity, bottom = float.NegativeInfinity;
-        for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
+        for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
         {
             int mask = _layout.PlacedMask(spell, x, y);
             for (int sector = 0; sector < 4; sector++)
@@ -653,7 +651,7 @@ public sealed class SpellGameUI : MonoBehaviour
         foreach (int other in _game.Spells)
         {
             if (other == spell || !_layout.IsPlaced(other)) continue;
-            for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
+            for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
                 if (_layout.PlacedMask(other, x, y) != 0 && candidate.Overlaps(new Rect(x * cell, y * cell, cell, cell))) return false;
             if (other < spell && _combatScreen.Tabs[other].gameObject.activeSelf)
             {
@@ -680,7 +678,7 @@ public sealed class SpellGameUI : MonoBehaviour
     private Vector2 PatternCenter(int spell, float cell)
     {
         Vector2 sum = Vector2.zero; int weight = 0;
-        for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
+        for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
         {
             int count = BitCount(_layout.PlacedMask(spell, x, y));
             sum += new Vector2(x + 0.5f, y + 0.5f) * count; weight += count;
@@ -1520,7 +1518,7 @@ public sealed class SpellGameUI : MonoBehaviour
     private void StartRun(bool withSealer, bool withThief = false, bool withCurser = false)
     {
         ResetTheft(); _isSealerRun = withSealer; _isThiefRun = withThief; _isCurserRun = withCurser;
-        _game.StartGame(false, withSealer, withThief, withCurser); _layout.SetSize(4, 3); ResetPatterns(); ClearSelection();
+        _game.StartGame(false, withSealer, withThief, withCurser); ResetPatterns(); ClearSelection();
         if (withSealer || withThief || withCurser) _onboardingComplete = true;
         _message = _game.SealNotice; _feedbackUntil = 0; Render();
     }
@@ -1636,7 +1634,7 @@ public sealed class SpellGameUI : MonoBehaviour
         {
             if (!_game.IsSealed(spell) || !_layout.IsPlaced(spell)) continue;
             Vector2 center = Vector2.zero; int count = 0;
-            for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
+            for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
                 if (_layout.PlacedMask(spell, x, y) != 0) { center += new Vector2(x + 0.5f, y + 0.5f); count++; }
             Vector2 point = ToLayer(_table.GridToScreen(center / count));
             float px = point.x - _root.rect.xMin, py = _root.rect.yMax - point.y;

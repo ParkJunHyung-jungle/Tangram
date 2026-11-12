@@ -9,6 +9,9 @@ using UnityEngine.InputSystem;
 public sealed class SpellTable3D : MonoBehaviour
 {
     private const int TABLE_LAYER = 30;
+    private const float BOARD_MARGIN = 0.22f;
+    // 마름모 칸 격자의 +x 축이 화면 오른쪽 아래를 향하도록 판 위 조각을 돌리는 각도다.
+    private const float BOARD_YAW = 45f;
     private static readonly Vector3 WORLD_ORIGIN = new Vector3(1000, 0, 0);
     private static readonly Color NORMAL_COLOR = new Color(0.77f, 0.82f, 0.84f);
     private static readonly Color CLAY_COLOR = new Color(0.72f, 0.56f, 0.44f);
@@ -34,10 +37,6 @@ public sealed class SpellTable3D : MonoBehaviour
     private SpellCombatScreen _screen;
     private Transform _world;
     private Transform _boardRoot;
-    private Transform _gridLines;
-    private Transform _boardSurface;
-    private int _gridColumns;
-    private int _gridRows;
     private int _handPage;
     private Transform _handRoot;
     private Transform _patterns;
@@ -100,11 +99,12 @@ public sealed class SpellTable3D : MonoBehaviour
         _boardRoot = _world.Find("Grid 3 x 4");
         _handRoot = _world.Find("Physical Hand");
         Transform boardSurface = _boardRoot.Find("Board slab");
-        _boardSurface = boardSurface;
         _handSurface = _handRoot.Find("Hand tray");
         Vector3 boardSize = boardSurface.localScale;
-        _cellSize = Mathf.Max(0.1f, (boardSize.x - 0.22f) / SpellPatternLayout.COLUMNS);
-        boardSize.z = _cellSize * SpellPatternLayout.ROWS + 0.22f;
+        // 화면 기준 정사각형 판을 기존 받침의 짧은 변 안에 맞춘다.
+        float side = Mathf.Min(boardSize.x, boardSize.z);
+        _cellSize = Mathf.Max(0.1f, (side - BOARD_MARGIN) / SpellPatternLayout.BOARD_SIZE);
+        boardSize.x = boardSize.z = side;
         boardSurface.localScale = boardSize;
         boardSurface.localPosition = Vector3.down * boardSize.y * 0.5f;
         _handSurface.localPosition = Vector3.down * _handSurface.localScale.y * 0.5f;
@@ -112,8 +112,7 @@ public sealed class SpellTable3D : MonoBehaviour
         _handSurface.GetComponent<BoxCollider>().sharedMaterial = _physicsMaterial;
         _patterns = CreateRoot("Spell Outlines", _boardRoot);
         _preview = CreateRoot("Template Preview", _boardRoot);
-        _gridLines = CreateRoot("Grid Lines", _boardRoot);
-        RebuildGrid();
+        BuildSurfaces();
         ConfigureCamera();
         _screen.Board.enabled = false;
         _screen.HandDropArea.gameObject.SetActive(false);
@@ -135,27 +134,30 @@ public sealed class SpellTable3D : MonoBehaviour
         Material material = new Material(source); material.color = color; _materials.Add(material); return material;
     }
 
-    /// <summary>현재 격자 크기에 맞춰 판과 격자선을 갱신한다.</summary>
-    private void RebuildGrid()
-    {
-        _gridColumns = _layout.Columns; _gridRows = _layout.Rows;
-        Vector3 size = _boardSurface.localScale;
-        size.x = _cellSize * _gridColumns + 0.22f; size.z = _cellSize * _gridRows + 0.22f;
-        _boardSurface.localScale = size;
-        foreach (Transform line in _gridLines) Destroy(line.gameObject);
-        BuildSurfaces();
-    }
-
-    /// <summary>현재 격자 크기에 맞춰 격자선을 만든다.</summary>
+    /// <summary>판에 속한 삼각 구역의 변을 판 위 선으로 그린다. 두 구역이 공유하는 변은 한 번만 그린다.</summary>
     private void BuildSurfaces()
     {
         Material grid = Colored(_lineMaterial, new Color(0.46f, 0.49f, 0.57f));
-        for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
+        for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
         {
-            Vector2 a = new Vector2(x, y), b = new Vector2(x + 1, y), c = new Vector2(x + 1, y + 1), d = new Vector2(x, y + 1);
-            Line(_gridLines, new[] { GridLocal(a), GridLocal(b), GridLocal(c), GridLocal(d), GridLocal(a) }, grid, 0.016f);
-            Line(_gridLines, new[] { GridLocal(a), GridLocal(c) }, grid, 0.016f);
-            Line(_gridLines, new[] { GridLocal(b), GridLocal(d) }, grid, 0.016f);
+            int mask = SpellPatternLayout.BoardMask(x, y);
+            Vector2[] corners = { new Vector2(x, y), new Vector2(x + 1, y), new Vector2(x + 1, y + 1), new Vector2(x, y + 1) };
+            Vector2 center = new Vector2(x + 0.5f, y + 0.5f);
+            for (int sector = 0; sector < 4; sector++)
+            {
+                if ((mask & (1 << sector)) == 0) continue;
+                int key = (y * SpellPatternLayout.COLUMNS + x) * 4 + sector;
+                for (int edge = 0; edge < 3; edge++)
+                {
+                    SpellPatternLayout.Neighbor(x, y, sector, edge, out int nx, out int ny, out int ns);
+                    bool shared = (SpellPatternLayout.BoardMask(nx, ny) & (1 << ns)) != 0;
+                    if (shared && (ny * SpellPatternLayout.COLUMNS + nx) * 4 + ns < key) continue;
+                    Vector2 a = corners[sector], b = corners[(sector + 1) % 4];
+                    Vector2 from = edge == 0 ? b : edge == 1 ? center : a;
+                    Vector2 to = edge == 0 ? center : edge == 1 ? a : b;
+                    Line(_boardRoot, new[] { GridLocal(from), GridLocal(to) }, grid, 0.016f);
+                }
+            }
         }
     }
 
@@ -168,10 +170,11 @@ public sealed class SpellTable3D : MonoBehaviour
         line.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; line.receiveShadows = false;
     }
 
-    /// <summary>격자 좌표를 판 중심 기준 월드 축 방향의 로컬 좌표로 바꾼다.</summary>
+    /// <summary>격자 좌표를 45도 돌린 마름모 배치로 판 중심 기준 로컬 좌표에 바꾼다.</summary>
     private Vector3 GridLocal(Vector2 point, float height = 0.025f)
     {
-        return new Vector3((point.x - _layout.Columns * 0.5f) * _cellSize, height, (_layout.Rows * 0.5f - point.y) * _cellSize);
+        Vector2 board = SpellPatternLayout.GridToBoard(point) * _cellSize;
+        return new Vector3(board.x, height, -board.y);
     }
 
     /// <summary>Inspector 각도로 카메라를 조정하고 판과 손패를 목표 화면 위치에 놓는다.</summary>
@@ -234,8 +237,6 @@ public sealed class SpellTable3D : MonoBehaviour
     /// <summary>모델의 손패·배치 상태와 3D 조각을 동기화하고 새 손패만 낙하시킨다.</summary>
     public void Sync()
     {
-        bool resized = _gridColumns != _layout.Columns || _gridRows != _layout.Rows;
-        if (resized) RebuildGrid();
         _handPage = Mathf.Clamp(_handPage, 0, Mathf.Max(0, (_game.Hand.Count - 1) / 9));
         CancelPick(); Vector3 previousHandPosition = _handRoot.position;
         Canvas.ForceUpdateCanvases(); ConfigureCamera();
@@ -252,11 +253,7 @@ public sealed class SpellTable3D : MonoBehaviour
         {
             SpellGame.Card card = _game.Hand[i];
             SpellPiece3D piece = GetPiece(card);
-            if (piece.IsHand)
-            {
-                if (resized) piece.DropToHand(piece.Slot, SlotPosition(piece.Slot), _cellSize, 0.2f);
-                continue;
-            }
+            if (piece.IsHand) continue;
             int slot = FreeSlot(); piece.DropToHand(slot, SlotPosition(slot), _cellSize, _dropHeight + Random.Range(0f, 0.45f));
         }
         foreach (int spell in _game.Spells) foreach (SpellGame.Placement placement in _game.Boards[spell].Pieces) PlaceOnBoard(GetPiece(placement.Card), spell, placement);
@@ -278,7 +275,7 @@ public sealed class SpellTable3D : MonoBehaviour
         foreach (SpellGame.ShapeCell cell in cells) anchor = Vector2Int.Min(anchor, new Vector2Int(cell.X, cell.Y));
         for (int i = 0; i < cells.Count; i++) cells[i] = new SpellGame.ShapeCell(cells[i].X - anchor.x, cells[i].Y - anchor.y, cells[i].Mask);
         float layer = IsLayered(spell, placement) ? SpellPiece3D.Thickness * _cellSize : 0;
-        piece.PlaceOnBoard(spell, placement, cells, PiecePosition(anchor, cells, 0.045f + layer), _cellSize);
+        piece.PlaceOnBoard(spell, placement, cells, PiecePosition(anchor, cells, 0.045f + layer), Quaternion.Euler(0, BOARD_YAW, 0), _cellSize);
     }
 
     /// <summary>덧칠 조각이 같은 판의 다른 조각과 구역을 공유하는지 반환한다.</summary>
@@ -341,7 +338,7 @@ public sealed class SpellTable3D : MonoBehaviour
         Ray ray = _camera.ScreenPointToRay(screenPosition); Plane plane = new Plane(Vector3.up, _boardRoot.position);
         if (!plane.Raycast(ray, out float distance)) { grid = default; return false; }
         Vector3 local = _boardRoot.InverseTransformPoint(ray.GetPoint(distance));
-        grid = new Vector2(local.x / _cellSize + _layout.Columns * 0.5f, _layout.Rows * 0.5f - local.z / _cellSize); return true;
+        grid = SpellPatternLayout.BoardToGrid(new Vector2(local.x, -local.z) / _cellSize); return true;
     }
 
     /// <summary>도안의 삼각 구역을 얇은 입체로 채우고 외부 경계에만 주문 색 외곽선을 그린다.</summary>
@@ -371,7 +368,7 @@ public sealed class SpellTable3D : MonoBehaviour
     private void DrawPattern(Transform parent, int spell, Vector2Int origin, int rotation, Material fill, Material border)
     {
         List<Vector3> vertices = new List<Vector3>(); List<int> triangles = new List<int>();
-        for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
+        for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
         {
             int mask = SpellPatternLayout.GridMask(spell, origin, rotation, x, y);
             Vector2[] corners = { new Vector2(x, y), new Vector2(x + 1, y), new Vector2(x + 1, y + 1), new Vector2(x, y + 1) };
@@ -406,19 +403,25 @@ public sealed class SpellTable3D : MonoBehaviour
         {
             if (!_layout.IsPlaced(spell)) continue;
             Vector2 min = Vector2.positiveInfinity, max = Vector2.negativeInfinity, sum = Vector2.zero; int weight = 0;
-            for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
+            for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
             {
                 int mask = _layout.PlacedMask(spell, x, y);
+                Vector2[] corners = { new Vector2(x, y), new Vector2(x + 1, y), new Vector2(x + 1, y + 1), new Vector2(x, y + 1) };
+                Vector2 center = new Vector2(x + 0.5f, y + 0.5f);
                 for (int sector = 0; sector < 4; sector++)
                 {
                     if ((mask & (1 << sector)) == 0) continue;
-                    Vector2 a = new Vector2(x + (sector == 1 ? 0.5f : 0), y + (sector == 2 ? 0.5f : 0));
-                    Vector2 b = new Vector2(x + (sector == 3 ? 0.5f : 1), y + (sector == 0 ? 0.5f : 1));
-                    min = Vector2.Min(min, a); max = Vector2.Max(max, b); sum += new Vector2(x + 0.5f, y + 0.5f); weight++;
+                    // 마름모 배치에서는 격자 축 경계가 화면 경계와 다르므로 삼각형 꼭짓점을 투영해 범위를 구한다.
+                    foreach (Vector2 point in new[] { corners[sector], corners[(sector + 1) % 4], center })
+                    {
+                        Vector2 overlay = OverlayPoint(parent, point);
+                        min = Vector2.Min(min, overlay); max = Vector2.Max(max, overlay);
+                    }
+                    sum += center; weight++;
                 }
             }
-            Vector2 leftTop = OverlayPoint(parent, min), rightBottom = OverlayPoint(parent, max);
-            float width = Mathf.Abs(OverlayPoint(parent, Vector2.right).x - OverlayPoint(parent, Vector2.zero).x);
+            Vector2 leftTop = new Vector2(min.x, max.y), rightBottom = new Vector2(max.x, min.y);
+            float width = Vector2.Distance(OverlayPoint(parent, Vector2.right), OverlayPoint(parent, Vector2.zero));
             Vector2[] candidates = { leftTop + Vector2.up * 36, new Vector2(leftTop.x, rightBottom.y), leftTop + Vector2.left * width, new Vector2(rightBottom.x, leftTop.y) };
             Vector2 selected = candidates[0];
             foreach (Vector2 candidate in candidates)
@@ -428,12 +431,8 @@ public sealed class SpellTable3D : MonoBehaviour
                 foreach (int other in _game.Spells)
                 {
                     if (other == spell || !_layout.IsPlaced(other)) continue;
-                    for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
-                    {
-                        if (_layout.PlacedMask(other, x, y) == 0) continue;
-                        Vector2 p = OverlayPoint(parent, new Vector2(x, y)); Vector2 q = OverlayPoint(parent, new Vector2(x + 1, y + 1));
-                        if (rect.Overlaps(new Rect(p.x, -p.y, q.x - p.x, p.y - q.y))) collision = true;
-                    }
+                    for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
+                        if (_layout.PlacedMask(other, x, y) != 0 && rect.Overlaps(OverlayCellRect(parent, x, y))) collision = true;
                 }
                 if (!collision) { selected = candidate; break; }
             }
@@ -449,6 +448,18 @@ public sealed class SpellTable3D : MonoBehaviour
         Vector3 screen = _camera.WorldToScreenPoint(_boardRoot.TransformPoint(GridLocal(grid, 0.3f)));
         RectTransformUtility.ScreenPointToLocalPointInRectangle(parent, screen, null, out Vector2 point);
         return new Vector2(point.x - parent.rect.xMin, point.y - parent.rect.yMax);
+    }
+
+    /// <summary>격자 칸의 네 꼭짓점을 투영한 화면 범위를 이름표 충돌 검사용 좌표(x 오른쪽, y 아래)로 반환한다.</summary>
+    private Rect OverlayCellRect(RectTransform parent, int x, int y)
+    {
+        Vector2 min = Vector2.positiveInfinity, max = Vector2.negativeInfinity;
+        for (int i = 0; i < 4; i++)
+        {
+            Vector2 p = OverlayPoint(parent, new Vector2(x + (i == 1 || i == 2 ? 1 : 0), y + (i >= 2 ? 1 : 0)));
+            p.y = -p.y; min = Vector2.Min(min, p); max = Vector2.Max(max, p);
+        }
+        return Rect.MinMaxRect(min.x, min.y, max.x, max.y);
     }
 
     void Update()
@@ -602,8 +613,8 @@ public sealed class SpellTable3D : MonoBehaviour
         return false;
     }
 
-    /// <summary>소수 격자 위치가 판 안에 있는지 반환한다.</summary>
-    private bool OnGrid(Vector2 grid) { return grid.x >= 0 && grid.x < _layout.Columns && grid.y >= 0 && grid.y < _layout.Rows; }
+    /// <summary>소수 격자 위치가 판에 속한 구역 위에 있는지 반환한다.</summary>
+    private static bool OnGrid(Vector2 grid) { return SpellPatternLayout.Contains(grid); }
 
     /// <summary>칸 중심에서 포인터가 향한 상·우·하·좌 삼각 구역을 반환한다.</summary>
     private static int Sector(Vector2 grid)
@@ -617,21 +628,21 @@ public sealed class SpellTable3D : MonoBehaviour
     {
         _picked = piece; _pressPosition = pointer; _isHolding = true; _isClickSelected = false;
         float yaw = piece.transform.eulerAngles.y, nearest = float.PositiveInfinity;
-        _rotation = Mathf.RoundToInt(yaw / 90f) % 4;
+        _rotation = (Mathf.RoundToInt((yaw - BOARD_YAW) / 90f) % 4 + 4) % 4;
         // 판에 놓인 조각은 메시가 방향을 담고 있으므로 놓인 방향 그대로 집는다.
         if (!piece.IsHand) { _layout.PieceToGrid(piece.Board, piece.Placement, out Vector2Int _, out _rotation); nearest = 0; }
         for (int r = 0; r < 4 && piece.IsHand; r++)
         {
             bool valid = false;
-            foreach (int spell in _game.Spells) for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
+            foreach (int spell in _game.Spells) for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
             {
                 _layout.GridToLocalPlacement(spell, piece.Card, new Vector2Int(x, y), r, out Vector2Int local, out int localRotation);
                 if (_layout.IsPlaced(spell) && _game.CanPlace(spell, piece.Card, local.x, local.y, localRotation, piece.Board == spell ? piece.Placement : null)) valid = true;
             }
-            float delta = Mathf.Abs(Mathf.DeltaAngle(yaw, r * 90f));
+            float delta = Mathf.Abs(Mathf.DeltaAngle(yaw, BOARD_YAW + r * 90f));
             if (valid && delta < nearest) { _rotation = r; nearest = delta; }
         }
-        _picked.Pick(_cellSize, HeldCells()); HideHover(pointer); PreviewPick(pointer);
+        _picked.Pick(_cellSize, HeldCells(), Quaternion.Euler(0, BOARD_YAW, 0)); HideHover(pointer); PreviewPick(pointer);
     }
 
     /// <summary>포인터에 가장 가까운 격자 앵커를 찾고 배치 가능 여부를 조각 색으로 표시한다.</summary>
@@ -654,7 +665,7 @@ public sealed class SpellTable3D : MonoBehaviour
             _picked.transform.position = PiecePosition(_anchor, cells, 0.045f) + Vector3.up * 0.22f;
         }
         else _picked.transform.position = _boardRoot.TransformPoint(GridLocal(grid, 0.42f));
-        _picked.transform.rotation = Quaternion.identity;
+        _picked.transform.rotation = Quaternion.Euler(0, BOARD_YAW, 0);
         _picked.SetTint(_destination >= 0 ? new Color(0.55f, 0.95f, 0.68f) : new Color(1f, 0.5f, 0.4f));
     }
 

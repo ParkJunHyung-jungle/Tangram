@@ -59,7 +59,6 @@ public sealed class SpellLoadoutScreen : MonoBehaviour
     /// <summary>보관함 카드와 격자를 현재 배치로 다시 그리고 안내를 기본 문구로 되돌린다.</summary>
     public void Refresh()
     {
-        _grid.RefreshSize();
         List<int> stored = new List<int>();
         foreach (int spell in _owned) if (!_layout.IsPlaced(spell) && spell != _held) stored.Add(spell);
         while (_cards.Count < stored.Count) _cards.Add(Instantiate(_storageTemplate, _storage));

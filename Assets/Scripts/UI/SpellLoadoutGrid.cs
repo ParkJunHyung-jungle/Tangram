@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
 
-/// <summary>장착 화면의 3×4 격자에 놓인 도안과 들고 있는 도안의 놓기 미리 보기를 1/4 구역 단위로 그리고 클릭을 전달한다.</summary>
+/// <summary>장착 화면의 마름모 칸 판에 놓인 도안과 들고 있는 도안의 놓기 미리 보기를 1/4 구역 단위로 그리고 클릭을 전달한다.</summary>
 public sealed class SpellLoadoutGrid : UnityEngine.UI.MaskableGraphic, IPointerClickHandler, IPointerMoveHandler, IPointerExitHandler
 {
     private const float CELL_GAP = 3f;
@@ -29,20 +29,10 @@ public sealed class SpellLoadoutGrid : UnityEngine.UI.MaskableGraphic, IPointerC
     private int _heldRotation;
     private Vector2Int _hover = new Vector2Int(-1, -1);
 
-    private float CellSize { get { return _cellSize; } }
-
     /// <summary>표시할 도안 배치, 보유 목록, 도안 색과 칸 클릭 동작을 설정한다.</summary>
     public void Setup(SpellPatternLayout layout, IReadOnlyList<int> owned, Func<int, Color> colorOf, Action<Vector2Int> onClick)
     {
         _layout = layout; _owned = owned; _colorOf = colorOf; _onClick = onClick; SetVerticesDirty();
-    }
-
-    /// <summary>칸 크기를 유지한 채 현재 행과 열에 맞춰 격자 영역을 확장한다.</summary>
-    public void RefreshSize()
-    {
-        rectTransform.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, _layout.Columns * _cellSize);
-        rectTransform.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, _layout.Rows * _cellSize);
-        SetVerticesDirty();
     }
 
     /// <summary>격자 표시 영역을 지정한 화면 좌표만큼 이동한다.</summary>
@@ -62,11 +52,18 @@ public sealed class SpellLoadoutGrid : UnityEngine.UI.MaskableGraphic, IPointerC
     protected override void OnPopulateMesh(UnityEngine.UI.VertexHelper vh)
     {
         vh.Clear(); if (_layout == null) return;
-        for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
+        for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
         {
+            int board = SpellPatternLayout.BoardMask(x, y);
+            if (board == 0) continue;
             Vector2 center = CellGeometry(x, y);
-            for (int sector = 0; sector < 4; sector++) Sector(vh, center, sector, _emptyColor);
-            for (int side = 0; side < 4; side++) { Line(vh, center, _corners[side], 1.2f, _lineColor); Line(vh, _corners[side], _corners[(side + 1) % 4], 1.2f, _lineColor); }
+            for (int sector = 0; sector < 4; sector++)
+            {
+                if ((board & (1 << sector)) == 0) continue;
+                Sector(vh, center, sector, _emptyColor);
+                Line(vh, center, _corners[sector], 1.2f, _lineColor); Line(vh, center, _corners[(sector + 1) % 4], 1.2f, _lineColor);
+                Line(vh, _corners[sector], _corners[(sector + 1) % 4], 1.2f, _lineColor);
+            }
         }
         foreach (int spell in _owned)
         {
@@ -85,9 +82,9 @@ public sealed class SpellLoadoutGrid : UnityEngine.UI.MaskableGraphic, IPointerC
     /// <summary>도안 하나를 원점·회전으로 채우고 바깥 경계에 외곽선을 그린다. 격자 밖 구역은 그리지 않는다.</summary>
     private void DrawPattern(UnityEngine.UI.VertexHelper vh, int spell, Vector2Int origin, int rotation, Color fill, Color line)
     {
-        for (int y = 0; y < _layout.Rows; y++) for (int x = 0; x < _layout.Columns; x++)
+        for (int y = 0; y < SpellPatternLayout.ROWS; y++) for (int x = 0; x < SpellPatternLayout.COLUMNS; x++)
         {
-            int mask = SpellPatternLayout.GridMask(spell, origin, rotation, x, y);
+            int mask = SpellPatternLayout.GridMask(spell, origin, rotation, x, y) & SpellPatternLayout.BoardMask(x, y);
             if (mask == 0) continue;
             Vector2 center = CellGeometry(x, y);
             for (int sector = 0; sector < 4; sector++)
@@ -106,14 +103,24 @@ public sealed class SpellLoadoutGrid : UnityEngine.UI.MaskableGraphic, IPointerC
         }
     }
 
-    /// <summary>칸 (x, y)의 네 모서리를 _corners에 채우고 중심을 반환한다.</summary>
+    /// <summary>칸 (x, y)의 네 모서리를 45도 돌린 마름모 위치로 _corners에 채우고 중심을 반환한다. 모서리는 칸 간격만큼 중심 쪽으로 당긴다.</summary>
     private Vector2 CellGeometry(int x, int y)
     {
-        Rect rect = rectTransform.rect;
-        float left = rect.xMin + x * CellSize, top = rect.yMax - y * CellSize;
-        float right = left + CellSize - CELL_GAP, bottom = top - CellSize + CELL_GAP;
-        _corners[0] = new Vector2(left, top); _corners[1] = new Vector2(right, top); _corners[2] = new Vector2(right, bottom); _corners[3] = new Vector2(left, bottom);
-        return new Vector2((left + right) / 2, (top + bottom) / 2);
+        Vector2 center = GridPoint(new Vector2(x + 0.5f, y + 0.5f));
+        float shrink = 1f - CELL_GAP / _cellSize;
+        for (int i = 0; i < 4; i++)
+        {
+            Vector2 corner = GridPoint(new Vector2(x + (i == 1 || i == 2 ? 1 : 0), y + (i >= 2 ? 1 : 0)));
+            _corners[i] = center + (corner - center) * shrink;
+        }
+        return center;
+    }
+
+    /// <summary>격자 좌표를 영역 중심에 놓인 마름모 판의 로컬 UI 좌표로 바꾼다.</summary>
+    private Vector2 GridPoint(Vector2 grid)
+    {
+        Vector2 board = SpellPatternLayout.GridToBoard(grid) * _cellSize;
+        return rectTransform.rect.center + new Vector2(board.x, -board.y);
     }
 
     /// <summary>칸의 구역 삼각형 하나를 채운다.</summary>
@@ -138,10 +145,10 @@ public sealed class SpellLoadoutGrid : UnityEngine.UI.MaskableGraphic, IPointerC
     {
         cell = new Vector2Int(-1, -1);
         if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rectTransform, data.position, data.pressEventCamera, out Vector2 local)) return false;
-        Rect rect = rectTransform.rect;
-        int x = Mathf.FloorToInt((local.x - rect.xMin) / CellSize), y = Mathf.FloorToInt((rect.yMax - local.y) / CellSize);
-        if (x < 0 || x >= _layout.Columns || y < 0 || y >= _layout.Rows) return false;
-        cell = new Vector2Int(x, y); return true;
+        Vector2 offset = local - rectTransform.rect.center;
+        Vector2 grid = SpellPatternLayout.BoardToGrid(new Vector2(offset.x, -offset.y) / _cellSize);
+        if (!SpellPatternLayout.Contains(grid)) return false;
+        cell = new Vector2Int(Mathf.FloorToInt(grid.x), Mathf.FloorToInt(grid.y)); return true;
     }
 
     public void OnPointerMove(PointerEventData data)
