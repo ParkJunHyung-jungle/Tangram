@@ -1437,10 +1437,13 @@ public sealed class SpellGameUI : MonoBehaviour
         else { ClearSelection(); _message = "도안이나 손패 위에 놓아 주세요"; Render(); }
     }
 
-    /// <summary>드래그 중인 도형을 화면 좌표로 이동한다.</summary>
+    /// <summary>화면 포인터 좌표를 미리 보기의 실제 부모 평면으로 변환해 드래그 중인 도형을 이동한다.</summary>
     public void MoveCardDrag(Vector2 position)
     {
-        if (_dragGhost != null) _dragGhost.anchoredPosition = ToLayer(position);
+        if (_dragGhost == null) return;
+        RectTransform parent = (RectTransform)_dragGhost.parent;
+        if (RectTransformUtility.ScreenPointToWorldPointInRectangle(parent, position, null, out Vector3 worldPosition))
+            _dragGhost.position = worldPosition;
     }
 
     /// <summary>드래그 중인 카드를 격자 위에 미리 표시한다.</summary>
